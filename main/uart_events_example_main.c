@@ -7,7 +7,7 @@
 #include "gpio_config.h"
 #include "sim7600.h"
 
-#define ALERT_INPUT_GPIO   GPIO_NUM_25   // input trigger
+#define ALERT_INPUT_GPIO   GPIO_NUM_0   // input trigger
 #define RESET_OUTPUT_GPIO  GPIO_NUM_26   // output reset
 
 static const char *TAG = "MAIN";
@@ -29,47 +29,58 @@ void mqtt_task(void *pvParameters) {
     while (1) {
         int level = gpio_get_level(ALERT_INPUT_GPIO);
 
-        if (level == 1) {
-            // Đọc thêm 2 lần để lọc nhiễu
+        // Thay đổi: cảnh báo khi GPIO = 0
+        if (level == 0) {
+            ESP_LOGW(TAG, "ALERT LOW! Confirming...");
+
+            // check thêm 2 lần nữa để lọc nhiễu
             bool confirmed = true;
             for (int i = 0; i < 2; i++) {
-                vTaskDelay(100 / portTICK_PERIOD_MS); // delay 100ms
-                if (gpio_get_level(ALERT_INPUT_GPIO) != 1) {
+                vTaskDelay(200 / portTICK_PERIOD_MS);
+                if (gpio_get_level(ALERT_INPUT_GPIO) != 0) {
                     confirmed = false;
                     break;
                 }
             }
+            if (!confirmed) continue;
 
-            if (confirmed) {
-                ESP_LOGW(TAG, "ALERT INPUT CONFIRMED HIGH! Start MQTT session...");
-
-                bool ok = sim7600_mqtt_connect("ESP32Client", "tcp://broker.hivemq.com:1883");
-                if (!ok) {
-                    sim7600_reset_module();
-                    continue;
-                }
-
-                // gửi liên tục trong 20s, mỗi 2s 1 lần
-                for (int i = 0; i < 10; i++) {
-                    if (!sim7600_mqtt_publish("esp32/alert", "ESP32 ALERT!")) {
-                        sim7600_reset_module();
-                        break;
-                    }
-                    vTaskDelay(2000 / portTICK_PERIOD_MS);
-                }
-
-                sim7600_mqtt_disconnect();
-
-                // reset output xuống 0 trong 1s
-                gpio_set_level(RESET_OUTPUT_GPIO, 0);
-                vTaskDelay(1000 / portTICK_PERIOD_MS);
-                gpio_set_level(RESET_OUTPUT_GPIO, 1);
+            // Kiểm tra sóng/mạng trước khi gửi MQTT
+            if (!sim7600_ready_for_mqtt()) {
+                ESP_LOGE(TAG, "No network! Resetting SIM7600...");
+                sim7600_reset_module();
+                continue;
             }
+
+            // MQTT
+            if (!sim7600_mqtt_start()) {
+                sim7600_reset_module();
+                continue;
+            }
+            if (!sim7600_mqtt_connect("ESP32Client", "tcp://test.mosquitto.org:1883", 60, 1)) {
+                sim7600_reset_module();
+                continue;
+            }
+
+            for (int i = 0; i < 10; i++) {
+                if (!sim7600_mqtt_publish("esp32/alert", "ESP32 ALERT!", 1)) {
+                    sim7600_reset_module();
+                    break;
+                }
+                vTaskDelay(2000 / portTICK_PERIOD_MS);
+            }
+
+            sim7600_mqtt_disconnect();
+
+            // reset output xuống 0 trong 1s
+            gpio_set_level(RESET_OUTPUT_GPIO, 0);
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            gpio_set_level(RESET_OUTPUT_GPIO, 1);
         }
 
         vTaskDelay(500 / portTICK_PERIOD_MS);
     }
 }
+
 
 static void gpio_app_init(void) {
     // Input

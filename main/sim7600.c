@@ -6,6 +6,64 @@
 
 static const char *TAG = "SIM7600";
 
+bool sim7600_check_signal(void) {
+    uint8_t data[BUF_SIZE];
+    memset(data, 0, BUF_SIZE);
+
+    uart_write_bytes(SIM7600_UART_NUM, "AT+CSQ\r\n", 8);
+    int len = uart_read_bytes(SIM7600_UART_NUM, data, BUF_SIZE-1, 2000/portTICK_PERIOD_MS);
+    if (len > 0) {
+        data[len] = 0;
+        ESP_LOGI(TAG, "CSQ RESP: %s", data);
+        char *p = strstr((char*)data, "+CSQ:");
+        if (p) {
+            int rssi = 0;
+            sscanf(p, "+CSQ: %d", &rssi);
+            if (rssi >= 10 && rssi <= 31) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool sim7600_check_network(void) {
+    uint8_t data[BUF_SIZE];
+    memset(data, 0, BUF_SIZE);
+
+    uart_write_bytes(SIM7600_UART_NUM, "AT+CREG?\r\n", 10);
+    int len = uart_read_bytes(SIM7600_UART_NUM, data, BUF_SIZE-1, 2000/portTICK_PERIOD_MS);
+    if (len > 0) {
+        data[len] = 0;
+        ESP_LOGI(TAG, "CREG RESP: %s", data);
+        char *p = strstr((char*)data, "+CREG:");
+        if (p) {
+            int n, stat;
+            sscanf(p, "+CREG: %d,%d", &n, &stat);
+            if (stat == 1 || stat == 5) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool sim7600_check_gprs(void) {
+    uint8_t data[BUF_SIZE];
+    memset(data, 0, BUF_SIZE);
+
+    uart_write_bytes(SIM7600_UART_NUM, "AT+CGATT?\r\n", 11);
+    int len = uart_read_bytes(SIM7600_UART_NUM, data, BUF_SIZE-1, 2000/portTICK_PERIOD_MS);
+    if (len > 0) {
+        data[len] = 0;
+        ESP_LOGI(TAG, "CGATT RESP: %s", data);
+        if (strstr((char*)data, "+CGATT: 1")) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void sim7600_uart_init(void) {
     const uart_config_t uart_config = {
         .baud_rate = SIM7600_BAUDRATE,
@@ -61,20 +119,30 @@ void sim7600_reset_module(void) {
 
 // ------------------ MQTT functions ------------------
 
-bool sim7600_mqtt_connect(const char *client_id, const char *broker) {
+bool sim7600_ready_for_mqtt(void) {
+    return sim7600_check_signal() && sim7600_check_network() && sim7600_check_gprs();
+}
+
+// ----------- MQTT Start ----------------
+bool sim7600_mqtt_start(void) {
+    return sim7600_send_cmd("AT+CMQTTSTART", "OK", 3, 5000);
+}
+
+bool sim7600_mqtt_connect(const char *client_id, const char *broker, int keepalive, int cleansession) {
     if (!sim7600_send_cmd("AT+CMQTTSTART", "OK", 3, 5000)) return false;
 
     char cmd[128];
     snprintf(cmd, sizeof(cmd), "AT+CMQTTACCQ=0,\"%s\"", client_id);
     if (!sim7600_send_cmd(cmd, "OK", 3, 2000)) return false;
 
-    snprintf(cmd, sizeof(cmd), "AT+CMQTTCONNECT=0,\"%s\",60,1,\"\",\"\"", broker);
+    snprintf(cmd, sizeof(cmd), "AT+CMQTTCONNECT=0,\"%s\",%d,%d,\"\",\"\"", broker, keepalive, cleansession);
     if (!sim7600_send_cmd(cmd, "OK", 3, 5000)) return false;
 
     return true;
 }
 
-bool sim7600_mqtt_publish(const char *topic, const char *payload) {
+
+bool sim7600_mqtt_publish(const char *topic, const char *payload, int qos) {
     char cmd[128];
     snprintf(cmd, sizeof(cmd), "AT+CMQTTTOPIC=0,%d", strlen(topic));
     if (!sim7600_send_cmd(cmd, ">", 3, 2000)) return false;
@@ -84,7 +152,8 @@ bool sim7600_mqtt_publish(const char *topic, const char *payload) {
     if (!sim7600_send_cmd(cmd, ">", 3, 2000)) return false;
     if (!sim7600_send_cmd(payload, "OK", 3, 2000)) return false;
 
-    if (!sim7600_send_cmd("AT+CMQTTPUB=0,1,60", "OK", 3, 5000)) return false;
+    snprintf(cmd, sizeof(cmd), "AT+CMQTTPUB=0,%d,60", qos);
+    if (!sim7600_send_cmd(cmd, "OK", 3, 5000)) return false;
 
     return true;
 }
