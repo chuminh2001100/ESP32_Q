@@ -136,9 +136,27 @@ bool sim7600_mqtt_connect(const char *client_id, const char *broker, int keepali
     if (!sim7600_send_cmd(cmd, "OK", 3, 2000)) return false;
 
     snprintf(cmd, sizeof(cmd), "AT+CMQTTCONNECT=0,\"%s\",%d,%d,\"\",\"\"", broker, keepalive, cleansession);
-    if (!sim7600_send_cmd(cmd, "OK", 3, 5000)) return false;
+    uart_write_bytes(SIM7600_UART_NUM, cmd, strlen(cmd));
+    uart_write_bytes(SIM7600_UART_NUM, "\r\n", 2);
 
-    return true;
+    char buf[512];
+    int retry = 10; // kiểm tra URC nhiều lần
+    for (int i = 0; i < retry; i++) {
+        int len = sim7600_read_resp(buf, sizeof(buf), 1000); // timeout 1s
+        if (len > 0) {
+            if (strstr(buf, "+CMQTTCONNECT: 0,0")) {
+                ESP_LOGI(TAG, "MQTT connected successfully");
+                return true;
+            }
+            if (strstr(buf, "+CMQTTCONNECT: 0,1")) {
+                ESP_LOGW(TAG, "MQTT connect failed");
+                return false;
+            }
+        }
+    }
+
+    ESP_LOGW(TAG, "MQTT connect timeout");
+    return false;
 }
 
 
