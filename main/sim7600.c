@@ -5,6 +5,7 @@
 #include "freertos/task.h"
 
 static const char *TAG = "SIM7600";
+static bool sim7600_is_on = false;
 
 bool sim7600_check_signal(void) {
     uint8_t data[BUF_SIZE];
@@ -112,9 +113,24 @@ bool sim7600_send_cmd(const char *cmd, const char *expect, int retry, int timeou
     return false;
 }
 
+void sim7600_power_off(void) {
+    gpio_set_level(SIM7600_PWRKEY_GPIO, 0);
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    gpio_set_level(SIM7600_PWRKEY_GPIO, 1);
+    vTaskDelay(4000 / portTICK_PERIOD_MS); // module tắt
+    sim7600_is_on = false;
+}
+
 void sim7600_reset_module(void) {
-    ESP_LOGW(TAG, "Resetting SIM7600...");
-    sim7600_power_on();   // dùng lại hàm bật lại từ gpio_config.c
+    if (!sim7600_is_on) {
+        ESP_LOGW(TAG, "SIM7600 not powered on yet, skip reset!");
+        return;
+    }
+
+    ESP_LOGW(TAG, "Resetting SIM7600 via power cycle...");
+    sim7600_power_off();
+    vTaskDelay(2000 / portTICK_PERIOD_MS);
+    sim7600_power_on();
 }
 
 // ------------------ MQTT functions ------------------
