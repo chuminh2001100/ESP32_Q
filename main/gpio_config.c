@@ -15,10 +15,4 @@ void sim7600_gpio_init(void) {
     gpio_set_level(SIM7600_PWRKEY_GPIO, 1); // default HIGH
 }
 
-void sim7600_power_on(void) {
-    // Theo datasheet: cần kéo PWRKEY xuống LOW ~1s để bật module
-    gpio_set_level(SIM7600_PWRKEY_GPIO, 0);
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
-    gpio_set_level(SIM7600_PWRKEY_GPIO, 1);
-    vTaskDelay(5000 / portTICK_PERIOD_MS); // đợi module khởi động
-}
+

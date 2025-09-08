@@ -8,82 +8,90 @@
 #include "sim7600.h"
 
 #define ALERT_INPUT_GPIO   GPIO_NUM_0   // input trigger
-#define RESET_OUTPUT_GPIO  GPIO_NUM_26   // output reset
+#define RESET_OUTPUT_GPIO  GPIO_NUM_26  // output reset
 
 static const char *TAG = "MAIN";
 
-// UART reader task
-void uart_reader_task(void *pvParameters) {
-    char buffer[512];
-    while (1) {
-        int len = sim7600_read_resp(buffer, sizeof(buffer), 1000);
-        if (len > 0) {
-            ESP_LOGI("UART_READER", "SIM7600 >> %s", buffer);
+// Hàm chống dội phím
+static bool debounce_gpio(int gpio, int expected_level, int samples, int delay_ms) {
+    for (int i = 0; i < samples; i++) {
+        if (gpio_get_level(gpio) != expected_level) {
+            return false;
         }
-        vTaskDelay(100 / portTICK_PERIOD_MS);
+        vTaskDelay(delay_ms / portTICK_PERIOD_MS);
     }
+    return true;
 }
 
-// MQTT publisher task
+// ---------------- MQTT Task ----------------
 void mqtt_task(void *pvParameters) {
     while (1) {
         int level = gpio_get_level(ALERT_INPUT_GPIO);
 
-        // Thay đổi: cảnh báo khi GPIO = 0
         if (level == 0) {
-            ESP_LOGW(TAG, "ALERT LOW! Confirming...");
+            ESP_LOGW(TAG, "ALERT LOW detected, checking debounce...");
 
-            // check thêm 2 lần nữa để lọc nhiễu
-            bool confirmed = true;
-            for (int i = 0; i < 2; i++) {
-                vTaskDelay(200 / portTICK_PERIOD_MS);
-                if (gpio_get_level(ALERT_INPUT_GPIO) != 0) {
-                    confirmed = false;
-                    break;
-                }
+            if (!debounce_gpio(ALERT_INPUT_GPIO, 0, 5, 10)) {
+                ESP_LOGW(TAG, "Debounce failed, ignore!");
+                vTaskDelay(100 / portTICK_PERIOD_MS);
+                continue;
             }
-            if (!confirmed) continue;
+
+            ESP_LOGI(TAG, "ALERT confirmed!");
 
             // Kiểm tra sóng/mạng trước khi gửi MQTT
-            if (!sim7600_ready_for_mqtt()) {
-                ESP_LOGE(TAG, "No network! Resetting SIM7600...");
-                sim7600_reset_module();
-                continue;
-            }
+           if (!sim7600_ready_for_mqtt_retry(5, 2000)) {
+			    ESP_LOGE(TAG, "Module not ready after retries -> Resetting SIM7600");
+			    sim7600_reset_module();
+			    continue;
+		    }
 
-            // MQTT
+            // MQTT session
+            ESP_LOGI(TAG, "Starting MQTT session...");
             if (!sim7600_mqtt_start()) {
-                sim7600_reset_module();
-                continue;
-            }
-            if (!sim7600_mqtt_connect("ESP32Client", "tcp://test.mosquitto.org:1883", 60, 1)) {
+                ESP_LOGE(TAG, "MQTT START failed -> Resetting SIM7600");
                 sim7600_reset_module();
                 continue;
             }
 
+            ESP_LOGI(TAG, "Connecting to broker: test.mosquitto.org:1883");
+            if (!sim7600_mqtt_connect("ESP32Client",
+                                      "tcp://test.mosquitto.org:1883",
+                                      60, 1)) {
+                ESP_LOGE(TAG, "MQTT CONNECT failed -> Resetting SIM7600");
+                sim7600_reset_module();
+                continue;
+            }
+
+            ESP_LOGI(TAG, "Publishing to topic: esp32/minhcv5/alert");
             for (int i = 0; i < 10; i++) {
-                if (!sim7600_mqtt_publish("esp32/alert", "ESP32 ALERT!", 1)) {
+                if (!sim7600_mqtt_publish("esp32/minhcv5/alert",
+                                          "ESP32 ALERT!", 1)) {
+                    ESP_LOGE(TAG, "MQTT PUBLISH failed -> Resetting SIM7600");
                     sim7600_reset_module();
                     break;
                 }
+                ESP_LOGI(TAG, "MQTT message %d/10 sent OK", i + 1);
                 vTaskDelay(2000 / portTICK_PERIOD_MS);
             }
 
+            ESP_LOGI(TAG, "Disconnecting MQTT...");
             sim7600_mqtt_disconnect();
 
-            // reset output xuống 0 trong 1s
+            // Toggle reset output trong 1s
+            ESP_LOGI(TAG, "Toggling RESET_OUTPUT_GPIO LOW for 1s");
             gpio_set_level(RESET_OUTPUT_GPIO, 0);
             vTaskDelay(1000 / portTICK_PERIOD_MS);
             gpio_set_level(RESET_OUTPUT_GPIO, 1);
         }
 
-        vTaskDelay(500 / portTICK_PERIOD_MS);
+        vTaskDelay(50 / portTICK_PERIOD_MS);
     }
 }
 
-
+// ---------------- GPIO Init ----------------
 static void gpio_app_init(void) {
-    // Input
+    // Input ALERT
     gpio_config_t in_conf = {
         .pin_bit_mask = 1ULL << ALERT_INPUT_GPIO,
         .mode = GPIO_MODE_INPUT,
@@ -93,7 +101,7 @@ static void gpio_app_init(void) {
     };
     gpio_config(&in_conf);
 
-    // Output
+    // Output RESET
     gpio_config_t out_conf = {
         .pin_bit_mask = 1ULL << RESET_OUTPUT_GPIO,
         .mode = GPIO_MODE_OUTPUT,
@@ -106,16 +114,24 @@ static void gpio_app_init(void) {
     gpio_set_level(RESET_OUTPUT_GPIO, 1);
 }
 
+// ---------------- Main Entry ----------------
 void app_main(void) {
-    ESP_LOGI(TAG, "Init GPIO...");
+    ESP_LOGI(TAG, "==== SYSTEM START ====");
+
+    // Init GPIO cho SIM7600 (PWRKEY, v.v…)
     sim7600_gpio_init();
+
+    // Bật nguồn module SIM7600
     sim7600_power_on();
+
+    // Init GPIO ALERT + RESET
     gpio_app_init();
 
-    ESP_LOGI(TAG, "Init UART...");
+    // Init UART giao tiếp SIM7600 (sẽ tự tạo task reader ở trong)
     sim7600_uart_init();
 
-    // start tasks
-    xTaskCreate(uart_reader_task, "uart_reader_task", 4096, NULL, 10, NULL);
+    // Tạo task MQTT
     xTaskCreate(mqtt_task, "mqtt_task", 4096, NULL, 9, NULL);
+
+    ESP_LOGI(TAG, "==== SYSTEM READY ====");
 }
