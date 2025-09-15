@@ -14,28 +14,32 @@
 #define SIM7600_BAUDRATE 115200
 #define BUF_SIZE         512
 
-// Khởi tạo UART + task reader
+// ---------------- UART + Queue ----------------
+// Khởi tạo UART và task reader
 void sim7600_uart_init(void);
 
-// Gửi AT command, chờ expect, retry nếu fail
-bool sim7600_send_cmd(const char *cmd, const char *expect, int retry, int timeout_ms);
+// ---------------- AT Command ----------------
+// Gửi AT command dưới dạng HEX hoặc string
+bool sim7600_send_cmd_str(const char *cmd, const char *expect, int retry, int timeout_ms);
+bool sim7600_send_cmd_hex(const uint8_t *cmd, size_t len, const char *expect, int retry, int timeout_ms);
 
-// Đọc response (sẽ được thay bằng queue)
+// Đọc response từ queue
 int sim7600_read_resp(char *buffer, int max_len, int timeout_ms);
 
-// Reset module
-void sim7600_reset_module(void);
+// ---------------- Power & Reset ----------------
 void sim7600_power_on(void);
 void sim7600_power_off(void);
+void sim7600_reset_module(void);
 
-// Kiểm tra module ready
+// ---------------- Check module ----------------
+bool sim7600_basic_check(void);
 bool sim7600_check_signal(void);
 bool sim7600_check_network(void);
 bool sim7600_check_gprs(void);
 bool sim7600_ready_for_mqtt(void);
 bool sim7600_ready_for_mqtt_retry(int retries, int delay_ms);
 
-// MQTT functions
+// ---------------- MQTT ----------------
 bool sim7600_mqtt_start(void);
 bool sim7600_mqtt_connect(const char *client_id, const char *broker, int keepalive, int cleansession);
 bool sim7600_mqtt_publish(const char *topic, const char *payload, int qos);

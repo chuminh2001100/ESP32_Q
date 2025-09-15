@@ -121,14 +121,28 @@ void app_main(void) {
     // Init GPIO cho SIM7600 (PWRKEY, v.v…)
     sim7600_gpio_init();
 
-    // Bật nguồn module SIM7600
-    sim7600_power_on();
-
     // Init GPIO ALERT + RESET
     gpio_app_init();
 
-    // Init UART giao tiếp SIM7600 (sẽ tự tạo task reader ở trong)
+    // Init UART giao tiếp SIM7600
     sim7600_uart_init();
+
+    // Kiểm tra tình trạng SIM7600 trước khi bật
+    ESP_LOGI(TAG, "Checking SIM7600 status...");
+    if (!sim7600_basic_check()) {
+        ESP_LOGW(TAG, "No response -> powering on SIM7600...");
+        sim7600_power_on();
+
+        // Đợi module khởi động rồi check lại
+        vTaskDelay(3000 / portTICK_PERIOD_MS);
+        if (!sim7600_basic_check()) {
+            ESP_LOGE(TAG, "SIM7600 still not responding after power on!");
+        } else {
+            ESP_LOGI(TAG, "SIM7600 is now responding.");
+        }
+    } else {
+        ESP_LOGI(TAG, "SIM7600 already ON, skip power_on()");
+    }
 
     // Tạo task MQTT
     xTaskCreate(mqtt_task, "mqtt_task", 4096, NULL, 9, NULL);
