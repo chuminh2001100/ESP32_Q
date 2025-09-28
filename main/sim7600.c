@@ -6,16 +6,15 @@
 #include "driver/uart.h"
 
 static const char *TAG = "SIM7600";
-static bool sim7600_is_on = false;
+bool sim7600_waiting_resp = false;
+static char sim7600_rx_buffer[BUF_SIZE];
+static SemaphoreHandle_t sim7600_resp_sem;
 
-static QueueHandle_t sim7600_resp_queue;
-static QueueHandle_t sim7600_urc_queue;
-static QueueHandle_t uart_event_queue;
+static QueueHandle_t sim7600_event_queue = NULL;
 
-typedef struct {
-    char data[BUF_SIZE];
-} sim7600_msg_t;
-
+void sim7600_set_event_queue(QueueHandle_t queue) {
+    sim7600_event_queue = queue;
+}
 // ---------------- Helper ----------------
 static inline void trim_response(char *str) {
     char *start = str;
@@ -27,46 +26,6 @@ static inline void trim_response(char *str) {
         *end-- = '\0';
     }
 }
-
-// ---------------- UART Task ----------------
-static void sim7600_uart_event_task(void *arg) {
-    uart_event_t event;
-    uint8_t buf[BUF_SIZE];
-
-    while (1) {
-        if (!xQueueReceive(uart_event_queue, &event, portMAX_DELAY)) continue;
-
-        switch (event.type) {
-            case UART_DATA: {
-                int len = uart_read_bytes(SIM7600_UART_NUM, buf, sizeof(buf)-1, 20/portTICK_PERIOD_MS);
-                if (len <= 0) break;
-                buf[len] = '\0';
-                ESP_LOGI(TAG, "UART RX raw: %s", buf);
-
-                sim7600_msg_t msg;
-                strncpy(msg.data, (char*)buf, sizeof(msg.data)-1);
-                msg.data[sizeof(msg.data)-1] = '\0';
-
-                // URC detection
-                if (strstr(msg.data, "RDY") || strstr(msg.data, "+CPIN:") ||
-                    strstr(msg.data, "Call Ready") || strstr(msg.data, "SMS")) {
-                    xQueueSend(sim7600_urc_queue, &msg, 0);
-                } else {
-                    xQueueSend(sim7600_resp_queue, &msg, 0);
-                }
-                break;
-            }
-            case UART_FIFO_OVF:
-            case UART_BUFFER_FULL:
-                ESP_LOGW(TAG, "UART overflow");
-                uart_flush_input(SIM7600_UART_NUM);
-                xQueueReset(uart_event_queue);
-                break;
-            default: break;
-        }
-    }
-}
-
 // ---------------- UART Init ----------------
 void sim7600_uart_init(void) {
     uart_config_t uart_cfg = {
@@ -78,47 +37,133 @@ void sim7600_uart_init(void) {
         .source_clk= UART_SCLK_APB,
     };
 
-    uart_driver_install(SIM7600_UART_NUM, BUF_SIZE*2, 0, 20, &uart_event_queue, 0);
+    uart_driver_install(SIM7600_UART_NUM, BUF_SIZE * 2, 0, 0, NULL, 0);
     uart_param_config(SIM7600_UART_NUM, &uart_cfg);
     uart_set_pin(SIM7600_UART_NUM, SIM7600_TXD_PIN, SIM7600_RXD_PIN,
                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-
-    sim7600_resp_queue = xQueueCreate(5, sizeof(sim7600_msg_t));
-    sim7600_urc_queue  = xQueueCreate(5, sizeof(sim7600_msg_t));
 
     xTaskCreate(sim7600_uart_event_task, "sim7600_uart_evt", 4096, NULL, 12, NULL);
     ESP_LOGI(TAG, "UART init done, baud=%d", SIM7600_BAUDRATE);
 }
 
 // ---------------- Command ----------------
-bool sim7600_send_cmd(const uint8_t *cmd, size_t len, const char *expect, int retry, int timeout_ms) {
-    char buffer[BUF_SIZE];
+bool sim7600_send_cmd_str(const char *cmd, const char *expect, int retry, int timeout_ms) {
+    char tx_buf[128];
+    size_t len = snprintf(tx_buf, sizeof(tx_buf), "%s\r\n", cmd);
 
-    for (int i=0; i<retry; i++) {
-        xQueueReset(sim7600_resp_queue);
-        uart_write_bytes(SIM7600_UART_NUM, (const char*)cmd, len);
-        ESP_LOGI(TAG, "Send HEX (%d bytes)", (int)len);
-        ESP_LOG_BUFFER_HEX(TAG, cmd, len);
+    for (int i = 0; i < retry; i++) {
+        uart_flush_input(SIM7600_UART_NUM);
+        uart_write_bytes(SIM7600_UART_NUM, tx_buf, len);
+        ESP_LOGI(TAG, "Send: %s", cmd);
 
-        int attempts = 3;
-        while (attempts--) {
-            int l = sim7600_read_resp(buffer, sizeof(buffer), timeout_ms);
-            if (l > 0 && strstr(buffer, expect)) {
-                ESP_LOGI(TAG, "CMD OK");
+        sim7600_waiting_resp = true;
+        if (xSemaphoreTake(sim7600_resp_sem, timeout_ms / portTICK_PERIOD_MS)) {
+            sim7600_waiting_resp = false;
+            if (strstr(sim7600_rx_buffer, expect)) {
+                ESP_LOGI(TAG, "Recv: %s", sim7600_rx_buffer);
                 return true;
             }
         }
-        ESP_LOGW(TAG, "Retry %d/%d failed", i+1, retry);
+        sim7600_waiting_resp = false;
+        ESP_LOGW(TAG, "Retry %d/%d", i + 1, retry);
     }
 
-    ESP_LOGE(TAG, "CMD FAILED");
+    ESP_LOGE(TAG, "CMD FAILED: %s", cmd);
     return false;
 }
 
-bool sim7600_send_cmd_str(const char *cmd, const char *expect, int retry, int timeout_ms) {
-    uint8_t buf[128];
-    size_t len = snprintf((char*)buf, sizeof(buf), "%s\r\n", cmd);
-    return sim7600_send_cmd(buf, len, expect, retry, timeout_ms);
+bool sim7600_ready_for_mqtt_retry(int retries, int delay_ms) {
+    for (int i = 0; i < retries; i++) {
+        ESP_LOGI(TAG, "[%d/%d] Checking SIM7600 network...", i + 1, retries);
+
+        bool ok = true;
+
+        // Module phản hồi?
+        if (!sim7600_send_cmd_str("AT", "OK", 1, 1000)) {
+            ESP_LOGW(TAG, "No response from SIM7600");
+            ok = false;
+        }
+
+        // SIM sẵn sàng?
+        if (ok && !sim7600_send_cmd_str("AT+CPIN?", "READY", 1, 2000)) {
+            ESP_LOGW(TAG, "SIM not ready");
+            ok = false;
+        }
+
+        // Đăng ký mạng GSM?
+        if (ok && 
+            !sim7600_send_cmd_str("AT+CREG?", "+CREG: 0,1", 1, 2000) &&
+            !sim7600_send_cmd_str("AT+CREG?", "+CREG: 0,5", 1, 2000)) {
+            ESP_LOGW(TAG, "Network not registered (GSM)");
+            ok = false;
+        }
+
+        // Đăng ký mạng dữ liệu?
+        if (ok && 
+            !sim7600_send_cmd_str("AT+CGREG?", "+CGREG: 0,1", 1, 2000) &&
+            !sim7600_send_cmd_str("AT+CGREG?", "+CGREG: 0,5", 1, 2000)) {
+            ESP_LOGW(TAG, "Network not registered (GPRS)");
+            ok = false;
+        }
+
+        // GPRS attach?
+        if (ok && !sim7600_send_cmd_str("AT+CGATT?", "+CGATT: 1", 1, 2000)) {
+            ESP_LOGW(TAG, "GPRS not attached");
+            ok = false;
+        }
+
+        // Có IP chưa?
+        if (ok && !sim7600_send_cmd_str("AT+CGPADDR", "+CGPADDR: 1,", 1, 2000)) {
+            ESP_LOGW(TAG, "No IP address");
+            ok = false;
+        }
+
+        if (ok) {
+            ESP_LOGI(TAG, "SIM7600 network is ready!");
+            return true;
+        }
+
+        // Chưa sẵn sàng, chờ rồi thử lại
+        vTaskDelay(delay_ms / portTICK_PERIOD_MS);
+    }
+
+    ESP_LOGE(TAG, "❌ SIM7600 network NOT ready after %d retries", retries);
+    return false;
+}
+
+
+void sim7600_uart_reader_task(void *arg) {
+    uint8_t rx_buf[BUF_SIZE];
+    int len;
+
+    while (1) {
+        len = uart_read_bytes(SIM7600_UART_NUM, rx_buf, sizeof(rx_buf) - 1, 100 / portTICK_PERIOD_MS);
+        if (len > 0) {
+            rx_buf[len] = '\0';
+            trim_response((char*)rx_buf);
+            ESP_LOGI(TAG, "UART recv: %s", rx_buf);
+
+            if (sim7600_waiting_resp) {
+                strncpy(sim7600_rx_buffer, (char*)rx_buf, BUF_SIZE);
+                xSemaphoreGive(sim7600_resp_sem); // báo task gửi biết có phản hồi
+            } else {
+                // xử lý URC trực tiếp
+			   if (strstr((char*)rx_buf, "+CMQTTDISC:")) {
+                    sim7600_event_t ev = { .type = SIM7600_EVENT_MQTT_DISCONNECTED };
+                    if (sim7600_event_queue)
+                        xQueueSend(sim7600_event_queue, &ev, 0);
+                } 
+                else if (strstr((char*)rx_buf, "+CMQTTSUBRECV:")) {
+                    sim7600_event_t ev = { .type = SIM7600_EVENT_MQTT_SUBRECV };
+                    // parse topic và payload
+                    sscanf((char*)rx_buf, "+CMQTTSUBRECV: 0,%*d,\"%63[^\"]\",%*d,%255[^\n]", ev.topic, ev.payload);
+                    if (sim7600_event_queue){
+						xQueueSend(sim7600_event_queue, &ev, 0);
+					}
+                }
+            }
+        }
+    }
 }
 
 // ---------------- Basic Check ----------------
@@ -131,10 +176,9 @@ bool sim7600_basic_check(void) {
 // ---------------- Power/Reset ----------------
 void sim7600_power_on(void) {
     gpio_set_level(SIM7600_PWRKEY_GPIO, 0);
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    vTaskDelay(800 / portTICK_PERIOD_MS);
     gpio_set_level(SIM7600_PWRKEY_GPIO, 1);
-    vTaskDelay(3000 / portTICK_PERIOD_MS);
-    sim7600_is_on = true;
+    vTaskDelay(5000 / portTICK_PERIOD_MS);
     ESP_LOGI(TAG, "SIM7600 powered ON");
 }
 
@@ -143,12 +187,10 @@ void sim7600_power_off(void) {
     vTaskDelay(2500 / portTICK_PERIOD_MS);
     gpio_set_level(SIM7600_PWRKEY_GPIO, 1);
     vTaskDelay(3000 / portTICK_PERIOD_MS);
-    sim7600_is_on = false;
     ESP_LOGI(TAG, "SIM7600 powered OFF");
 }
 
 void sim7600_reset_module(void) {
-    if (!sim7600_is_on) return;
     ESP_LOGW(TAG, "Resetting SIM7600...");
     sim7600_power_off();
     vTaskDelay(2000 / portTICK_PERIOD_MS);
@@ -159,7 +201,6 @@ void sim7600_reset_module(void) {
 bool sim7600_mqtt_start(void) {
     if (sim7600_send_cmd_str("AT+CMQTTSTART", "OK", 3, 5000)) return true;
     char buf[BUF_SIZE];
-    sim7600_read_resp(buf, sizeof(buf), 1000);
     if (strstr(buf, "+CMQTTSTART: 23")) {
         sim7600_send_cmd_str("AT+CMQTTSTOP", "OK", 3, 3000);
         return sim7600_send_cmd_str("AT+CMQTTSTART", "OK", 3, 5000);
@@ -203,4 +244,75 @@ bool sim7600_mqtt_disconnect(void) {
     sim7600_send_cmd_str("AT+CMQTTREL=0", "OK", 3, 2000);
     sim7600_send_cmd_str("AT+CMQTTSTOP", "OK", 3, 3000);
     return true;
+}
+
+bool sim7600_check_signal(int *out_rssi) {
+    const char *cmd = "AT+CSQ";
+    const char *expect = "+CSQ:";
+    int retry = 3;
+    int timeout_ms = 2000;
+
+    // Gửi lệnh AT+CSQ
+    if (!sim7600_send_cmd_str(cmd, expect, retry, timeout_ms)) {
+        ESP_LOGE(TAG, "Không nhận được phản hồi CSQ");
+        return false;
+    }
+
+    // Đến đây thì sim7600_rx_buffer chứa phản hồi
+    // Ví dụ: "\r\n+CSQ: 20,99\r\n\r\nOK\r\n"
+    char *p = strstr(sim7600_rx_buffer, "+CSQ:");
+    if (!p) {
+        ESP_LOGE(TAG, "Không tìm thấy +CSQ trong phản hồi");
+        return false;
+    }
+
+    int rssi = 0, ber = 0;
+    if (sscanf(p, "+CSQ: %d,%d", &rssi, &ber) == 2) {
+        ESP_LOGI(TAG, "RSSI = %d, BER = %d", rssi, ber);
+        if (out_rssi) *out_rssi = rssi;
+
+        if (rssi == 99) {
+            ESP_LOGW(TAG, "RSSI = 99 (không xác định)");
+            return false;
+        }
+
+        if (rssi >= 10) {
+            ESP_LOGI(TAG, "Sóng đủ mạnh (RSSI = %d)", rssi);
+            return true;
+        } else {
+            ESP_LOGW(TAG, "Sóng yếu (RSSI = %d)", rssi);
+            return false;
+        }
+    }
+
+    ESP_LOGE(TAG, "Phân tích +CSQ thất bại");
+    return false;
+}
+
+
+bool parse_mqtt_urc(const char *urc, char *topic_out, char *payload_out) {
+    const char *p = strstr(urc, "+CMQTTSUBRECV:");
+    if (!p) return false;
+
+    // format: +CMQTTSUBRECV: 0,14,"device/ctrl/1",5,"ON"
+    int client, topic_len, payload_len;
+    char topic[64], payload[128];
+    if (sscanf(p, "+CMQTTSUBRECV: %d,%d,\"%[^\"]\",%d,\"%[^\"]\"", 
+               &client, &topic_len, topic, &payload_len, payload) == 5) {
+        strcpy(topic_out, topic);
+        strcpy(payload_out, payload);
+        return true;
+    }
+    return false;
+}
+
+void handle_mqtt_command(const char *topic, const char *payload) {
+    if (strcmp(topic, "device/ctrl/1") == 0) {
+        ESP_LOGI(TAG, "Control 1 -> payload: %s", payload);
+        // ví dụ: bật/tắt GPIO
+    } else if (strcmp(topic, "device/ctrl/2") == 0) {
+        ESP_LOGI(TAG, "Control 2 -> payload: %s", payload);
+    } else if (strcmp(topic, "device/ctrl/3") == 0) {
+        ESP_LOGI(TAG, "Control 3 -> payload: %s", payload);
+    }
 }

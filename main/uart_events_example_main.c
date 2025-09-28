@@ -54,16 +54,16 @@ void mqtt_task(void *pvParameters) {
                 continue;
             }
 
-            ESP_LOGI(TAG, "Connecting to broker: test.mosquitto.org:1883");
+            ESP_LOGI(TAG, "Connecting to broker: mqtt.mcvmindd.cloud:1883");
             if (!sim7600_mqtt_connect("ESP32Client",
-                                      "tcp://test.mosquitto.org:1883",
+                                      "tcp://mqtt.mcvmindd.cloud:1883",
                                       60, 1)) {
                 ESP_LOGE(TAG, "MQTT CONNECT failed -> Resetting SIM7600");
                 sim7600_reset_module();
                 continue;
             }
 
-            ESP_LOGI(TAG, "Publishing to topic: esp32/minhcv5/alert");
+            ESP_LOGI(TAG, "Publishing to topic: smart/devices/alert");
             for (int i = 0; i < 10; i++) {
                 if (!sim7600_mqtt_publish("esp32/minhcv5/alert",
                                           "ESP32 ALERT!", 1)) {
@@ -129,20 +129,33 @@ void app_main(void) {
 
     // Kiểm tra tình trạng SIM7600 trước khi bật
     ESP_LOGI(TAG, "Checking SIM7600 status...");
-    if (!sim7600_basic_check()) {
-        ESP_LOGW(TAG, "No response -> powering on SIM7600...");
-        sim7600_power_on();
 
-        // Đợi module khởi động rồi check lại
-        vTaskDelay(3000 / portTICK_PERIOD_MS);
-        if (!sim7600_basic_check()) {
-            ESP_LOGE(TAG, "SIM7600 still not responding after power on!");
-        } else {
-            ESP_LOGI(TAG, "SIM7600 is now responding.");
-        }
-    } else {
-        ESP_LOGI(TAG, "SIM7600 already ON, skip power_on()");
-    }
+	int sim_ok = sim7600_basic_check();
+	if (!sim_ok) {
+	    ESP_LOGW(TAG, "No response -> powering ON SIM7600 (1st try)...");
+	    sim7600_power_on();
+	    vTaskDelay(5000 / portTICK_PERIOD_MS);
+	
+	    sim_ok = sim7600_basic_check();
+	    if (!sim_ok) {
+	        ESP_LOGW(TAG, "Still no response -> powering ON SIM7600 (2nd try)...");
+	        sim7600_power_on();
+	        vTaskDelay(5000 / portTICK_PERIOD_MS);
+	
+	        sim_ok = sim7600_basic_check();
+	        if (!sim_ok) {
+	            ESP_LOGE(TAG, "SIM7600 FAILED after 2 retries -> restarting ESP32...");
+	            vTaskDelay(2000 / portTICK_PERIOD_MS);
+	            esp_restart();
+	        } else {
+	            ESP_LOGI(TAG, "SIM7600 OK after 2nd power on.");
+	        }
+	    } else {
+	        ESP_LOGI(TAG, "SIM7600 OK after 1st power on.");
+	    }
+	} else {
+	    ESP_LOGI(TAG, "SIM7600 already ON and responding.");
+	}
 
     // Tạo task MQTT
     xTaskCreate(mqtt_task, "mqtt_task", 4096, NULL, 9, NULL);
