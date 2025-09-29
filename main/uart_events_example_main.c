@@ -85,13 +85,6 @@ void mqtt_task(void *pvParameters) {
     int count_send_fail = 0;
     int count_send_fail_alert = 0;
     while (1) {
-        if (xQueueReceive(sim_event_queue, &evt, 100 / portTICK_PERIOD_MS)) {
-            if (evt.type == SIM7600_EVENT_MQTT_DISCONNECT) {
-                ESP_LOGW("MQTT_TASK", "Received disconnect event -> reconnecting...");
-                sim7600_mqtt_reconnect();
-            }
-        }
-
         // 2️⃣ Gửi heartbeat mỗi 5 phút
         if (mqtt_connected && (xTaskGetTickCount() - last_heartbeat >= heartbeat_interval)) {
             ESP_LOGI(TAG, "Sending heartbeat...");
