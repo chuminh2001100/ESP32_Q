@@ -12,6 +12,19 @@
 
 static const char *TAG = "MAIN";
 
+bool mqtt_connected = false;
+
+typedef enum {
+    MQTT_STATE_IDLE = 0,        // chưa CMQTTSTART
+    MQTT_STATE_STARTED,         // đã CMQTTSTART
+    MQTT_STATE_CLIENT_CREATED,  // đã CMQTTACCQ
+    MQTT_STATE_CONNECTED        // đã CONNECT
+} mqtt_state_t;
+
+static mqtt_state_t mqtt_state = MQTT_STATE_IDLE;
+static bool mqtt_connected = false;
+
+static QueueHandle_t sim7600_event_queue = NULL;
 // Hàm chống dội phím
 static bool debounce_gpio(int gpio, int expected_level, int samples, int delay_ms) {
     for (int i = 0; i < samples; i++) {
@@ -23,71 +36,179 @@ static bool debounce_gpio(int gpio, int expected_level, int samples, int delay_m
     return true;
 }
 
-// ---------------- MQTT Task ----------------
-void mqtt_task(void *pvParameters) {
+
+void sim7600_event_task(void *param) {
+    sim7600_event_t event;
+
     while (1) {
-        int level = gpio_get_level(ALERT_INPUT_GPIO);
-
-        if (level == 0) {
-            ESP_LOGW(TAG, "ALERT LOW detected, checking debounce...");
-
-            if (!debounce_gpio(ALERT_INPUT_GPIO, 0, 5, 10)) {
-                ESP_LOGW(TAG, "Debounce failed, ignore!");
-                vTaskDelay(100 / portTICK_PERIOD_MS);
-                continue;
-            }
-
-            ESP_LOGI(TAG, "ALERT confirmed!");
-
-            // Kiểm tra sóng/mạng trước khi gửi MQTT
-           if (!sim7600_ready_for_mqtt_retry(5, 2000)) {
-			    ESP_LOGE(TAG, "Module not ready after retries -> Resetting SIM7600");
-			    sim7600_reset_module();
-			    continue;
-		    }
-
-            // MQTT session
-            ESP_LOGI(TAG, "Starting MQTT session...");
-            if (!sim7600_mqtt_start()) {
-                ESP_LOGE(TAG, "MQTT START failed -> Resetting SIM7600");
-                sim7600_reset_module();
-                continue;
-            }
-
-            ESP_LOGI(TAG, "Connecting to broker: mqtt.mcvmindd.cloud:1883");
-            if (!sim7600_mqtt_connect("ESP32Client",
-                                      "tcp://mqtt.mcvmindd.cloud:1883",
-                                      60, 1)) {
-                ESP_LOGE(TAG, "MQTT CONNECT failed -> Resetting SIM7600");
-                sim7600_reset_module();
-                continue;
-            }
-
-            ESP_LOGI(TAG, "Publishing to topic: smart/devices/alert");
-            for (int i = 0; i < 10; i++) {
-                if (!sim7600_mqtt_publish("esp32/minhcv5/alert",
-                                          "ESP32 ALERT!", 1)) {
-                    ESP_LOGE(TAG, "MQTT PUBLISH failed -> Resetting SIM7600");
-                    sim7600_reset_module();
+        if (xQueueReceive(sim7600_event_queue, &event, portMAX_DELAY)) {
+            switch (event.type) {
+                case SIM7600_EVENT_MQTT_DISCONNECTED:
+                    ESP_LOGW(TAG, "[EVENT] MQTT Disconnected! Cần reconnect...");
+                    mqtt_connected = false;
                     break;
-                }
-                ESP_LOGI(TAG, "MQTT message %d/10 sent OK", i + 1);
-                vTaskDelay(2000 / portTICK_PERIOD_MS);
+
+                case SIM7600_EVENT_MQTT_SUBRECV:
+                    ESP_LOGI("MQTT_TASK", "Received message: topic=%s payload=%s", evt.topic, evt.payload);
+                    // ✅ Xử lý theo topic
+                    if (strcmp(evt.topic, "esp32/minhcv5/cmd1") == 0) {
+                        ESP_LOGI("MQTT_TASK", "CMD1 -> toggle LED");
+                        // xử lý action 1
+                    } 
+                    else if (strcmp(evt.topic, "esp32/minhcv5/cmd2") == 0) {
+                        ESP_LOGI("MQTT_TASK", "CMD2 -> reset SIM");
+                        // xử lý action 2
+                    } 
+                    else if (strcmp(evt.topic, "esp32/minhcv5/cmd3") == 0) {
+                        ESP_LOGI("MQTT_TASK", "CMD3 -> custom action");
+                        // xử lý action 3
+                    }
+                    break;
+
+                case SIM7600_EVENT_NETWORK_LOST:
+                    ESP_LOGW(TAG, "[EVENT] Network Lost!");
+                    break;
+
+                case SIM7600_EVENT_NETWORK_READY:
+                    ESP_LOGI(TAG, "[EVENT] Network Ready!");
+                    break;
             }
-
-            ESP_LOGI(TAG, "Disconnecting MQTT...");
-            sim7600_mqtt_disconnect();
-
-            // Toggle reset output trong 1s
-            ESP_LOGI(TAG, "Toggling RESET_OUTPUT_GPIO LOW for 1s");
-            gpio_set_level(RESET_OUTPUT_GPIO, 0);
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
-            gpio_set_level(RESET_OUTPUT_GPIO, 1);
+            vTaskDelay(100 / portTICK_PERIOD_MS);
         }
-
-        vTaskDelay(50 / portTICK_PERIOD_MS);
     }
 }
+// ---------------- MQTT Task ----------------
+void mqtt_task(void *pvParameters) {
+    sim7600_event_t evt;
+    const TickType_t heartbeat_interval = 300000 / portTICK_PERIOD_MS; // 5 phút
+    TickType_t last_heartbeat = 0;
+    int count_send_fail = 0;
+    int count_send_fail_alert = 0;
+    while (1) {
+        if (xQueueReceive(sim_event_queue, &evt, 100 / portTICK_PERIOD_MS)) {
+            if (evt.type == SIM7600_EVENT_MQTT_DISCONNECT) {
+                ESP_LOGW("MQTT_TASK", "Received disconnect event -> reconnecting...");
+                sim7600_mqtt_reconnect();
+            }
+        }
+
+        // 2️⃣ Gửi heartbeat mỗi 5 phút
+        if (mqtt_connected && (xTaskGetTickCount() - last_heartbeat >= heartbeat_interval)) {
+            ESP_LOGI(TAG, "Sending heartbeat...");
+            if (!sim7600_mqtt_publish("esp32/minhcv5/heartbeat", "ESP32 ALIVE", 1)) {
+                ESP_LOGE(TAG, "Heartbeat publish failed -> mark disconnected");
+                count_send_fail++;
+                if (count_send_fail >= 3) {
+                    ESP_LOGE(TAG, "3 consecutive send failures -> reconnecting MQTT");
+                    count_send_fail = 0;
+                    sim7600_mqtt_reconnect();
+                } 
+            } else {
+                count_send_fail = 0;
+                last_heartbeat = xTaskGetTickCount();
+            }
+        }
+
+        // 3️⃣ Kiểm tra GPIO, nếu LOW thì gửi alert
+        int level = gpio_get_level(ALERT_INPUT_GPIO);
+        if (level == 0 && debounce_gpio(ALERT_INPUT_GPIO, 0, 5, 10)) {
+            ESP_LOGI(TAG, "🚨 ALERT GPIO detected! Sending MQTT alert...");
+
+            if (!sim7600_mqtt_publish("esp32/minhcv5/alert", "ESP32 ALERT!", 1)) {
+                ESP_LOGE(TAG, "Alert publish failed -> mark disconnected");
+                count_send_fail_alert++;
+                if (count_send_fail_alert >= 3) {
+                    ESP_LOGE(TAG, "3 consecutive send failures -> reconnecting MQTT");
+                    count_send_fail_alert = 0;
+                    sim7600_mqtt_reconnect();
+                }
+            }
+            else {
+                count_send_fail_alert = 0;
+            }
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+        }
+
+        if (!mqtt_connected) {
+            sim7600_mqtt_reconnect();
+        }
+
+        // 4️⃣ Delay vòng lặp
+        vTaskDelay(300 / portTICK_PERIOD_MS);
+    }
+}
+
+void sim7600_mqtt_reconnect() {
+    ESP_LOGW("MQTT", "Reconnecting MQTT...");
+
+    // Nếu đang kết nối → ngắt trước
+    if (mqtt_connected && mqtt_state == MQTT_STATE_CONNECTED) {
+        ESP_LOGI("MQTT", "Disconnecting old session...");
+        sim7600_send_cmd_str("AT+CMQTTDISC=0,60", "OK", 2, 2000);
+        mqtt_connected = false;
+    }
+
+    // Nếu đã tạo client → giải phóng
+    if (mqtt_state >= MQTT_STATE_CLIENT_CREATED) {
+        ESP_LOGI("MQTT", "Releasing old client...");
+        sim7600_send_cmd_str("AT+CMQTTREL=0", "OK", 2, 2000);
+        mqtt_state = MQTT_STATE_STARTED;
+    }
+
+    // Nếu đã start → dừng rồi start lại cho chắc
+    if (mqtt_state >= MQTT_STATE_STARTED) {
+        ESP_LOGI("MQTT", "Stopping old MQTT service...");
+        sim7600_send_cmd_str("AT+CMQTTSTOP", "OK", 2, 3000);
+        mqtt_state = MQTT_STATE_IDLE;
+    }
+
+    if (!sim7600_ready_for_mqtt_retry(5, 2000)) {
+        ESP_LOGW(TAG, "Network not ready, retry after 5s...");
+        vTaskDelay(5000 / portTICK_PERIOD_MS);
+        return;
+    }
+
+    // 🔁 Bắt đầu lại từ đầu
+    ESP_LOGI("MQTT", "Starting new MQTT session...");
+    if (!sim7600_send_cmd_str("AT+CMQTTSTART", "OK", 3, 3000)) {
+        ESP_LOGE("MQTT", "Failed to start MQTT service");
+        return;
+    }
+    mqtt_state = MQTT_STATE_STARTED;
+
+    // Tạo client
+    char client_id[32];
+    snprintf(client_id, sizeof(client_id), "ESP32-%lu", (unsigned long)xTaskGetTickCount());
+    char accq_cmd[64];
+    snprintf(accq_cmd, sizeof(accq_cmd), "AT+CMQTTACCQ=0,\"%s\",1", client_id);
+
+    if (!sim7600_send_cmd_str(accq_cmd, "OK", 2, 2000)) {
+        ESP_LOGE("MQTT", "Failed to create MQTT client");
+        mqtt_state = MQTT_STATE_STARTED;
+        return;
+    }
+    mqtt_state = MQTT_STATE_CLIENT_CREATED;
+
+    // Connect broker
+    ESP_LOGI("MQTT", "Connecting to broker...");
+    if (!sim7600_send_cmd_str("AT+CMQTTCONNECT=0,\"tcp://mqtt.mcvmindd.cloud:1883\",60,1", "OK", 3, 5000)) {
+        ESP_LOGE("MQTT", "Failed to connect to broker");
+        mqtt_state = MQTT_STATE_STARTED;
+        return;
+    }
+
+    mqtt_state = MQTT_STATE_CONNECTED;
+    mqtt_connected = true;
+
+    // Subscribe lại topic
+    ESP_LOGI("MQTT", "Subscribing topics...");
+    sim7600_mqtt_subscribe("esp32/minhcv5/cmd1", 1);
+    sim7600_mqtt_subscribe("esp32/minhcv5/cmd2", 1);
+    sim7600_mqtt_subscribe("esp32/minhcv5/cmd3", 1);
+
+    ESP_LOGI("MQTT", "Reconnect success!");
+}
+
 
 // ---------------- GPIO Init ----------------
 static void gpio_app_init(void) {
@@ -157,7 +278,9 @@ void app_main(void) {
 	    ESP_LOGI(TAG, "SIM7600 already ON and responding.");
 	}
 
-    // Tạo task MQTT
+    sim7600_event_queue = xQueueCreate(10, sizeof(sim7600_event_t));
+    sim7600_set_event_queue(sim7600_event_queue);
+    xTaskCreate(sim7600_event_task, "sim7600_event_task", 4096, NULL, 10, NULL);
     xTaskCreate(mqtt_task, "mqtt_task", 4096, NULL, 9, NULL);
 
     ESP_LOGI(TAG, "==== SYSTEM READY ====");

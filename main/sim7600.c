@@ -155,11 +155,37 @@ void sim7600_uart_reader_task(void *arg) {
                 } 
                 else if (strstr((char*)rx_buf, "+CMQTTSUBRECV:")) {
                     sim7600_event_t ev = { .type = SIM7600_EVENT_MQTT_SUBRECV };
-                    // parse topic và payload
-                    sscanf((char*)rx_buf, "+CMQTTSUBRECV: 0,%*d,\"%63[^\"]\",%*d,%255[^\n]", ev.topic, ev.payload);
+                    // ✅ parse theo format:
+                    // +CMQTTSUBRECV: 0,<msgid>,"topic",<len>,payload
+                    // Ta chỉ cần topic + payload
+                    char topic[64] = {0};
+                    char payload[256] = {0};
+
+                    // Cách parse an toàn: tìm vị trí thủ công
+                    char *start_topic = strchr((char*)rx_buf, '\"');
+                    char *end_topic = start_topic ? strchr(start_topic + 1, '\"') : NULL;
+                    if (start_topic && end_topic) {
+                        size_t topic_len = end_topic - start_topic - 1;
+                        strncpy(ev.topic, start_topic + 1, topic_len);
+                        ev.topic[topic_len] = '\0';
+                    } else {
+                        strcpy(ev.topic, "unknown");
+                    }
+
+                    // Payload là phần sau dấu phẩy cuối
+                    char *last_comma = strrchr((char*)rx_buf, ',');
+                    if (last_comma && strlen(last_comma) > 1) {
+                        strncpy(ev.payload, last_comma + 1, sizeof(ev.payload) - 1);
+                        trim_response(ev.payload);
+                    } else {
+                        strcpy(ev.payload, "");
+                    }
+
+                    ESP_LOGI(TAG, "Parsed MQTT msg: topic='%s', payload='%s'", ev.topic, ev.payload);
+
                     if (sim7600_event_queue){
-						xQueueSend(sim7600_event_queue, &ev, 0);
-					}
+                        xQueueSend(sim7600_event_queue, &ev, 0);
+                    } 
                 }
             }
         }
