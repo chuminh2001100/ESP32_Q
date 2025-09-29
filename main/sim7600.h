@@ -27,6 +27,18 @@ typedef struct {
     char topic[64];
     char payload[256];
 } sim7600_event_t;
+
+typedef struct {
+    char topic[256];
+    char payload[512];
+    bool receiving;  // đang trong quá trình nhận bản tin
+    int topic_len_expected;
+    int payload_len_expected;
+    int topic_len_received;
+    int payload_len_received;
+} sim7600_mqtt_rx_t;
+
+static sim7600_mqtt_rx_t mqtt_rx_state = {0};
 // ---------------- UART + Queue ----------------
 // Khởi tạo UART và task reader
 void sim7600_uart_init(void);

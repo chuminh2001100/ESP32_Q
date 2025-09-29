@@ -148,44 +148,62 @@ void sim7600_uart_reader_task(void *arg) {
                 xSemaphoreGive(sim7600_resp_sem); // báo task gửi biết có phản hồi
             } else {
                 // xử lý URC trực tiếp
-			   if (strstr((char*)rx_buf, "+CMQTTDISC:")) {
+			    if (strstr((char*)rx_buf, "+CMQTTDISC:")) {
                     sim7600_event_t ev = { .type = SIM7600_EVENT_MQTT_DISCONNECTED };
                     if (sim7600_event_queue)
                         xQueueSend(sim7600_event_queue, &ev, 0);
                 } 
-                else if (strstr((char*)rx_buf, "+CMQTTSUBRECV:")) {
-                    sim7600_event_t ev = { .type = SIM7600_EVENT_MQTT_SUBRECV };
-                    // ✅ parse theo format:
-                    // +CMQTTSUBRECV: 0,<msgid>,"topic",<len>,payload
-                    // Ta chỉ cần topic + payload
-                    char topic[64] = {0};
-                    char payload[256] = {0};
-
-                    // Cách parse an toàn: tìm vị trí thủ công
-                    char *start_topic = strchr((char*)rx_buf, '\"');
-                    char *end_topic = start_topic ? strchr(start_topic + 1, '\"') : NULL;
-                    if (start_topic && end_topic) {
-                        size_t topic_len = end_topic - start_topic - 1;
-                        strncpy(ev.topic, start_topic + 1, topic_len);
-                        ev.topic[topic_len] = '\0';
-                    } else {
-                        strcpy(ev.topic, "unknown");
+                else  if (strstr((char*)rx_buf, "+CMQTTRXSTART:")) {
+                    mqtt_rx_state.receiving = true;
+                    mqtt_rx_state.topic[0] = '\0';
+                    mqtt_rx_state.payload[0] = '\0';
+                    mqtt_rx_state.topic_len_received = 0;
+                    mqtt_rx_state.payload_len_received = 0;
+            
+                    sscanf((char*)rx_buf, "+CMQTTRXSTART: %*d,%d,%d",
+                           &mqtt_rx_state.topic_len_expected,
+                           &mqtt_rx_state.payload_len_expected);
+            
+                    ESP_LOGI(TAG, "Start receiving MQTT message (topic_len=%d, payload_len=%d)",
+                             mqtt_rx_state.topic_len_expected,
+                             mqtt_rx_state.payload_len_expected);
+                }
+                else if (strstr((char*)rx_buf, "+CMQTTRXTOPIC:")) {
+                    int sub_len = 0;
+                    sscanf((char*)rx_buf, "+CMQTTRXTOPIC: %*d,%d", &sub_len);
+                    // topic nằm ở dòng sau
+                    char *topic_content = strstr((char*)rx_buf, "\r\n");
+                    if (topic_content) {
+                        topic_content += 2;
+                        strncat(mqtt_rx_state.topic, topic_content, sizeof(mqtt_rx_state.topic) - 1);
+                        mqtt_rx_state.topic_len_received += strlen(topic_content);
                     }
-
-                    // Payload là phần sau dấu phẩy cuối
-                    char *last_comma = strrchr((char*)rx_buf, ',');
-                    if (last_comma && strlen(last_comma) > 1) {
-                        strncpy(ev.payload, last_comma + 1, sizeof(ev.payload) - 1);
-                        trim_response(ev.payload);
-                    } else {
-                        strcpy(ev.payload, "");
+                }
+                else if (strstr((char*)rx_buf, "+CMQTTRXPAYLOAD:")) {
+                    int sub_len = 0;
+                    sscanf((char*)rx_buf, "+CMQTTRXPAYLOAD: %*d,%d", &sub_len);
+                    // payload nằm ở dòng sau
+                    char *payload_content = strstr((char*)rx_buf, "\r\n");
+                    if (payload_content) {
+                        payload_content += 2;
+                        strncat(mqtt_rx_state.payload, payload_content, sizeof(mqtt_rx_state.payload) - 1);
+                        mqtt_rx_state.payload_len_received += strlen(payload_content);
                     }
-
-                    ESP_LOGI(TAG, "Parsed MQTT msg: topic='%s', payload='%s'", ev.topic, ev.payload);
-
-                    if (sim7600_event_queue){
+                }
+                else if (strstr((char*)rx_buf, "+CMQTTRXEND:")) {
+                    // Kết thúc gói tin => gửi event cho task chính
+                    mqtt_rx_state.receiving = false;
+                    ESP_LOGI(TAG, "MQTT RX done: topic=%s payload=%s",
+                             mqtt_rx_state.topic, mqtt_rx_state.payload);
+            
+                    sim7600_event_t ev = {
+                        .type = SIM7600_EVENT_MQTT_SUBRECV
+                    };
+                    strncpy(ev.topic, mqtt_rx_state.topic, sizeof(ev.topic));
+                    strncpy(ev.payload, mqtt_rx_state.payload, sizeof(ev.payload));
+            
+                    if (sim7600_event_queue)
                         xQueueSend(sim7600_event_queue, &ev, 0);
-                    } 
                 }
             }
         }
