@@ -178,7 +178,7 @@ void sim7600_mqtt_reconnect() {
 
     // Tạo client
     char client_id[32];
-    snprintf(client_id, sizeof(client_id), "ESP32-%lu", (unsigned long)xTaskGetTickCount());
+    snprintf(client_id, sizeof(client_id), "ESP32_AQ-%lu", (unsigned long)xTaskGetTickCount());
     char accq_cmd[64];
     snprintf(accq_cmd, sizeof(accq_cmd), "AT+CMQTTACCQ=0,\"%s\",1", client_id);
 
