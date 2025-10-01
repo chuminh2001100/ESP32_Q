@@ -22,7 +22,6 @@ typedef enum {
 } mqtt_state_t;
 
 static mqtt_state_t mqtt_state = MQTT_STATE_IDLE;
-static bool mqtt_connected = false;
 
 static QueueHandle_t sim7600_event_queue = NULL;
 // Hàm chống dội phím
@@ -38,11 +37,11 @@ static bool debounce_gpio(int gpio, int expected_level, int samples, int delay_m
 
 
 void sim7600_event_task(void *param) {
-    sim7600_event_t event;
+    sim7600_event_t evt;
 
     while (1) {
-        if (xQueueReceive(sim7600_event_queue, &event, portMAX_DELAY)) {
-            switch (event.type) {
+        if (xQueueReceive(sim7600_event_queue, &evt, portMAX_DELAY)) {
+            switch (evt.type) {
                 case SIM7600_EVENT_MQTT_DISCONNECTED:
                     ESP_LOGW(TAG, "[EVENT] MQTT Disconnected! Cần reconnect...");
                     mqtt_connected = false;
@@ -64,7 +63,9 @@ void sim7600_event_task(void *param) {
                         // xử lý action 3
                     }
                     break;
-
+				case SIM7600_EVENT_MQTT_CONNECTED:
+				 	ESP_LOGI(TAG, "[EVENT] MQTT CONNECTED");
+                    break;
                 case SIM7600_EVENT_NETWORK_LOST:
                     ESP_LOGW(TAG, "[EVENT] Network Lost!");
                     break;
@@ -75,59 +76,6 @@ void sim7600_event_task(void *param) {
             }
             vTaskDelay(100 / portTICK_PERIOD_MS);
         }
-    }
-}
-// ---------------- MQTT Task ----------------
-void mqtt_task(void *pvParameters) {
-    sim7600_event_t evt;
-    const TickType_t heartbeat_interval = 300000 / portTICK_PERIOD_MS; // 5 phút
-    TickType_t last_heartbeat = 0;
-    int count_send_fail = 0;
-    int count_send_fail_alert = 0;
-    while (1) {
-        // 2️⃣ Gửi heartbeat mỗi 5 phút
-        if (mqtt_connected && (xTaskGetTickCount() - last_heartbeat >= heartbeat_interval)) {
-            ESP_LOGI(TAG, "Sending heartbeat...");
-            if (!sim7600_mqtt_publish("esp32/minhcv5/heartbeat", "ESP32 ALIVE", 1)) {
-                ESP_LOGE(TAG, "Heartbeat publish failed -> mark disconnected");
-                count_send_fail++;
-                if (count_send_fail >= 3) {
-                    ESP_LOGE(TAG, "3 consecutive send failures -> reconnecting MQTT");
-                    count_send_fail = 0;
-                    sim7600_mqtt_reconnect();
-                } 
-            } else {
-                count_send_fail = 0;
-                last_heartbeat = xTaskGetTickCount();
-            }
-        }
-
-        // 3️⃣ Kiểm tra GPIO, nếu LOW thì gửi alert
-        int level = gpio_get_level(ALERT_INPUT_GPIO);
-        if (level == 0 && debounce_gpio(ALERT_INPUT_GPIO, 0, 5, 10)) {
-            ESP_LOGI(TAG, "🚨 ALERT GPIO detected! Sending MQTT alert...");
-
-            if (!sim7600_mqtt_publish("esp32/minhcv5/alert", "ESP32 ALERT!", 1)) {
-                ESP_LOGE(TAG, "Alert publish failed -> mark disconnected");
-                count_send_fail_alert++;
-                if (count_send_fail_alert >= 3) {
-                    ESP_LOGE(TAG, "3 consecutive send failures -> reconnecting MQTT");
-                    count_send_fail_alert = 0;
-                    sim7600_mqtt_reconnect();
-                }
-            }
-            else {
-                count_send_fail_alert = 0;
-            }
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
-        }
-
-        if (!mqtt_connected) {
-            sim7600_mqtt_reconnect();
-        }
-
-        // 4️⃣ Delay vòng lặp
-        vTaskDelay(300 / portTICK_PERIOD_MS);
     }
 }
 
@@ -184,7 +132,7 @@ void sim7600_mqtt_reconnect() {
 
     // Connect broker
     ESP_LOGI("MQTT", "Connecting to broker...");
-    if (!sim7600_send_cmd_str("AT+CMQTTCONNECT=0,\"tcp://mqtt.mcvmindd.cloud:1883\",60,1", "OK", 3, 5000)) {
+    if (!sim7600_send_cmd_str("AT+CMQTTCONNECT=0,\"tcp://mqtt.mcvmindd.cloud:1883\",60,1,mqttuser,Vht@2026", "+CMQTTCONNECT: 0,0", 3, 5000)) {
         ESP_LOGE("MQTT", "Failed to connect to broker");
         mqtt_state = MQTT_STATE_STARTED;
         return;
@@ -201,6 +149,61 @@ void sim7600_mqtt_reconnect() {
 
     ESP_LOGI("MQTT", "Reconnect success!");
 }
+// ---------------- MQTT Task ----------------
+void mqtt_task(void *pvParameters) {
+    const TickType_t heartbeat_interval = 300000 / portTICK_PERIOD_MS; // 5 phút
+    TickType_t last_heartbeat = 0;
+    int count_send_fail = 0;
+    int count_send_fail_alert = 0;
+    while (1) {
+        // 2️⃣ Gửi heartbeat mỗi 5 phút
+        if (mqtt_connected && (xTaskGetTickCount() - last_heartbeat >= heartbeat_interval)) {
+            ESP_LOGI(TAG, "Sending heartbeat...");
+            if (!sim7600_mqtt_publish("esp32/minhcv5/heartbeat", "ESP32 ALIVE", 1)) {
+                ESP_LOGE(TAG, "Heartbeat publish failed -> mark disconnected");
+                count_send_fail++;
+                if (count_send_fail >= 3) {
+                    ESP_LOGE(TAG, "3 consecutive send failures -> reconnecting MQTT");
+                    count_send_fail = 0;
+                    sim7600_mqtt_reconnect();
+                } 
+            } else {
+                count_send_fail = 0;
+                last_heartbeat = xTaskGetTickCount();
+            }
+        }
+
+        // 3️⃣ Kiểm tra GPIO, nếu LOW thì gửi alert
+        int level = gpio_get_level(ALERT_INPUT_GPIO);
+        if (level == 0 && debounce_gpio(ALERT_INPUT_GPIO, 0, 5, 10)) {
+            ESP_LOGI(TAG, "🚨 ALERT GPIO detected! Sending MQTT alert...");
+
+            if (!sim7600_mqtt_publish("esp32/minhcv5/alert", "ESP32 ALERT!", 1)) {
+                ESP_LOGE(TAG, "Alert publish failed -> mark disconnected");
+                count_send_fail_alert++;
+                if (count_send_fail_alert >= 3) {
+                    ESP_LOGE(TAG, "3 consecutive send failures -> reconnecting MQTT");
+                    count_send_fail_alert = 0;
+                    sim7600_mqtt_reconnect();
+                }
+            }
+            else {
+                count_send_fail_alert = 0;
+            }
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+        }
+
+        if (!mqtt_connected) {
+			ESP_LOGI(TAG,"Start Connect MQTT");
+            sim7600_mqtt_reconnect();
+        }
+
+        // 4️⃣ Delay vòng lặp
+        vTaskDelay(300 / portTICK_PERIOD_MS);
+    }
+}
+
+
 
 
 // ---------------- GPIO Init ----------------
@@ -230,6 +233,7 @@ static void gpio_app_init(void) {
 
 // ---------------- Main Entry ----------------
 void app_main(void) {
+	esp_log_level_set("*", ESP_LOG_VERBOSE);
     ESP_LOGI(TAG, "==== SYSTEM START ====");
 
     // Init GPIO cho SIM7600 (PWRKEY, v.v…)
@@ -244,7 +248,9 @@ void app_main(void) {
     // Kiểm tra tình trạng SIM7600 trước khi bật
     ESP_LOGI(TAG, "Checking SIM7600 status...");
 
-	int sim_ok = sim7600_basic_check();
+	bool sim_ok;
+	sim_ok = sim7600_basic_check();
+	ESP_LOGI(TAG, "After check sim7600 basic");
 	if (!sim_ok) {
 	    ESP_LOGW(TAG, "No response -> powering ON SIM7600 (1st try)...");
 	    sim7600_power_on();

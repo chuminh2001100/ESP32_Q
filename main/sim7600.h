@@ -13,13 +13,14 @@
 #define SIM7600_RXD_PIN  GPIO_NUM_16
 #define SIM7600_BAUDRATE 115200
 #define BUF_SIZE         512
-#define SIM7600_PWRKEY_GPIO   GPIO_NUM_4   // ví dụ dùng GPIO4 để bật module
+#define SIM7600_PWRKEY_GPIO   GPIO_NUM_23   // ví dụ dùng GPIO4 để bật module
 
 typedef enum {
-    SIM7600_EVENT_MQTT_DISCONNECT,
-    SIM7600_EVENT_MQTT_MESSAGE,
+    SIM7600_EVENT_MQTT_DISCONNECTED,
+    SIM7600_EVENT_MQTT_CONNECTED,
     SIM7600_EVENT_NETWORK_LOST,
     SIM7600_EVENT_NETWORK_READY,
+    SIM7600_EVENT_MQTT_SUBRECV,
 } sim7600_event_type_t;
 
 typedef struct {
@@ -63,5 +64,7 @@ bool sim7600_mqtt_start(void);
 bool sim7600_mqtt_connect(const char *client_id, const char *broker, int keepalive, int cleansession);
 bool sim7600_mqtt_publish(const char *topic, const char *payload, int qos);
 bool sim7600_mqtt_disconnect(void);
-
+void sim7600_uart_reader_task(void *arg);
+void sim7600_set_event_queue(QueueHandle_t queue);
+bool sim7600_mqtt_subscribe(const char *topic, int qos);
 #endif // SIM7600_H

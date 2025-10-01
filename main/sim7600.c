@@ -42,7 +42,7 @@ void sim7600_uart_init(void) {
     uart_set_pin(SIM7600_UART_NUM, SIM7600_TXD_PIN, SIM7600_RXD_PIN,
                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
 
-    xTaskCreate(sim7600_uart_event_task, "sim7600_uart_evt", 4096, NULL, 12, NULL);
+    xTaskCreate(sim7600_uart_reader_task, "sim7600_uart_evt", 4096, NULL, 12, NULL);
     ESP_LOGI(TAG, "UART init done, baud=%d", SIM7600_BAUDRATE);
 }
 
@@ -152,8 +152,13 @@ void sim7600_uart_reader_task(void *arg) {
                     sim7600_event_t ev = { .type = SIM7600_EVENT_MQTT_DISCONNECTED };
                     if (sim7600_event_queue)
                         xQueueSend(sim7600_event_queue, &ev, 0);
-                } 
-                else  if (strstr((char*)rx_buf, "+CMQTTRXSTART:")) {
+                }
+                else if (strstr((char*)rx_buf, "+CMQTTCONNECT::")){
+					sim7600_event_t ev = { .type = SIM7600_EVENT_MQTT_CONNECTED };
+                    if (sim7600_event_queue)
+                        xQueueSend(sim7600_event_queue, &ev, 0);
+				}
+                else if (strstr((char*)rx_buf, "+CMQTTRXSTART:")) {
                     mqtt_rx_state.receiving = true;
                     mqtt_rx_state.topic[0] = '\0';
                     mqtt_rx_state.payload[0] = '\0';
@@ -212,9 +217,16 @@ void sim7600_uart_reader_task(void *arg) {
 
 // ---------------- Basic Check ----------------
 bool sim7600_basic_check(void) {
-    if (!sim7600_send_cmd_str("AT", "OK", 3, 2000)) return false;
-    sim7600_send_cmd_str("ATE0", "OK", 3, 2000);
-    return true;
+    for (int i = 0; i < 5; i++) {
+        if (sim7600_send_cmd_str("AT", "OK", 1, 1000)) {
+            ESP_LOGI("SIM7600", "AT OK (basic check pass)");
+            sim7600_send_cmd_str("ATE0", "OK", 3, 2000);
+            return true;
+        }
+        ESP_LOGW("SIM7600", "AT failed, retry %d/5...", i + 1);
+        vTaskDelay(2000 / portTICK_PERIOD_MS);
+    }
+    return false;
 }
 
 // ---------------- Power/Reset ----------------
@@ -260,10 +272,10 @@ bool sim7600_mqtt_connect(const char *client_id, const char *broker, int keepali
     snprintf(cmd, sizeof(cmd), "AT+CMQTTCONNECT=0,\"%s\",%d,%d,\"\",\"\"", broker, keepalive, cleansession);
     if (!sim7600_send_cmd_str(cmd, "OK", 3, 5000)) return false;
 
-    sim7600_msg_t msg;
+    sim7600_event_t msg;
     for (int i = 0; i < 10; i++) {
-        if (xQueueReceive(sim7600_urc_queue, &msg, 1000/portTICK_PERIOD_MS)) {
-            if (strstr(msg.data, "+CMQTTCONNECT: 0,0")) return true;
+        if (xQueueReceive(sim7600_event_queue, &msg, 1000/portTICK_PERIOD_MS)) {
+            if (strstr(msg.payload, "+CMQTTCONNECT: 0,0")) return true;
         }
     }
     return false;
@@ -281,6 +293,25 @@ bool sim7600_mqtt_publish(const char *topic, const char *payload, int qos) {
 
     snprintf(cmd, sizeof(cmd), "AT+CMQTTPUB=0,%d,60", qos);
     return sim7600_send_cmd_str(cmd, "OK", 3, 5000);
+}
+
+bool sim7600_mqtt_subscribe(const char *topic, int qos) {
+    char cmd[128];
+
+    // Bước 1: gửi lệnh khai báo độ dài topic và QoS
+    snprintf(cmd, sizeof(cmd), "AT+CMQTTSUBTOPIC=0,%d,%d", (int)strlen(topic), qos);
+    if (!sim7600_send_cmd_str(cmd, ">", 1, 2000)) return false;
+
+    // Bước 2: gửi nội dung topic
+    if (!sim7600_send_cmd_str(topic, "OK", 1, 2000)) return false;
+
+    // Bước 3: thực hiện lệnh subscribe
+    // msgid = 1, timeout = 60
+    snprintf(cmd, sizeof(cmd), "AT+CMQTTSUB=0,1,60");
+    if (!sim7600_send_cmd_str(cmd, "+CMQTTSUB: 0,0", 1, 5000)) return false;
+
+    // Có thể đợi URC: +CMQTTSUB: 0,0 báo subscribe thành công (nếu muốn)
+    return true;
 }
 
 bool sim7600_mqtt_disconnect(void) {
