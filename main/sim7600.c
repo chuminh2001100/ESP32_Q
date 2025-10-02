@@ -41,7 +41,10 @@ void sim7600_uart_init(void) {
     uart_param_config(SIM7600_UART_NUM, &uart_cfg);
     uart_set_pin(SIM7600_UART_NUM, SIM7600_TXD_PIN, SIM7600_RXD_PIN,
                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-
+    sim7600_resp_sem = xSemaphoreCreateBinary();
+    if (sim7600_resp_sem == NULL) {
+        ESP_LOGE(TAG, "Failed to create sim7600_resp_sem!");
+    }
     xTaskCreate(sim7600_uart_reader_task, "sim7600_uart_evt", 4096, NULL, 12, NULL);
     ESP_LOGI(TAG, "UART init done, baud=%d", SIM7600_BAUDRATE);
 }
@@ -153,7 +156,7 @@ void sim7600_uart_reader_task(void *arg) {
                     if (sim7600_event_queue)
                         xQueueSend(sim7600_event_queue, &ev, 0);
                 }
-                else if (strstr((char*)rx_buf, "+CMQTTCONNECT::")){
+                else if (strstr((char*)rx_buf, "+CMQTTCONNECT: 0,0")){
 					sim7600_event_t ev = { .type = SIM7600_EVENT_MQTT_CONNECTED };
                     if (sim7600_event_queue)
                         xQueueSend(sim7600_event_queue, &ev, 0);

@@ -43,7 +43,7 @@ void sim7600_event_task(void *param) {
         if (xQueueReceive(sim7600_event_queue, &evt, portMAX_DELAY)) {
             switch (evt.type) {
                 case SIM7600_EVENT_MQTT_DISCONNECTED:
-                    ESP_LOGW(TAG, "[EVENT] MQTT Disconnected! Cần reconnect...");
+                    ESP_LOGW(TAG, "[EVENT] MQTT Disconnected! Need reconnect...");
                     mqtt_connected = false;
                     break;
 
@@ -132,7 +132,7 @@ void sim7600_mqtt_reconnect() {
 
     // Connect broker
     ESP_LOGI("MQTT", "Connecting to broker...");
-    if (!sim7600_send_cmd_str("AT+CMQTTCONNECT=0,\"tcp://mqtt.mcvmindd.cloud:1883\",60,1,mqttuser,Vht@2026", "+CMQTTCONNECT: 0,0", 3, 5000)) {
+    if (!sim7600_send_cmd_str("AT+CMQTTCONNECT=0,\"tcp://mqtt.mcvmind.cloud:1883\",60,1,mqttuser,Vht@2026", "+CMQTTCONNECT: 0,0", 3, 5000)) {
         ESP_LOGE("MQTT", "Failed to connect to broker");
         mqtt_state = MQTT_STATE_STARTED;
         return;
