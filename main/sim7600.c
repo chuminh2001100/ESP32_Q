@@ -86,12 +86,13 @@ bool sim7600_ready_for_mqtt_retry(int retries, int delay_ms) {
             ESP_LOGW(TAG, "No response from SIM7600");
             ok = false;
         }
-
+		vTaskDelay(1000 / portTICK_PERIOD_MS);
         // SIM sẵn sàng?
         if (ok && !sim7600_send_cmd_str("AT+CPIN?", "READY", 1, 2000)) {
             ESP_LOGW(TAG, "SIM not ready");
             ok = false;
         }
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
 
         // Đăng ký mạng GSM?
         if (ok && 
@@ -100,6 +101,7 @@ bool sim7600_ready_for_mqtt_retry(int retries, int delay_ms) {
             ESP_LOGW(TAG, "Network not registered (GSM)");
             ok = false;
         }
+        vTaskDelay(800 / portTICK_PERIOD_MS);
 
         // Đăng ký mạng dữ liệu?
         if (ok && 
@@ -108,24 +110,41 @@ bool sim7600_ready_for_mqtt_retry(int retries, int delay_ms) {
             ESP_LOGW(TAG, "Network not registered (GPRS)");
             ok = false;
         }
-
+		vTaskDelay(800 / portTICK_PERIOD_MS);
         // GPRS attach?
         if (ok && !sim7600_send_cmd_str("AT+CGATT?", "+CGATT: 1", 1, 2000)) {
             ESP_LOGW(TAG, "GPRS not attached");
             ok = false;
         }
-
+		vTaskDelay(800 / portTICK_PERIOD_MS);
+		
+		if (ok && !sim7600_send_cmd_str("AT+CGDCONT=1,\"IP\",\"v-internet\"", "OK", 1, 3000)) {
+            ESP_LOGW(TAG, "GPRS not attached");
+            ok = false;
+        }
+		vTaskDelay(800 / portTICK_PERIOD_MS);
+		if (!sim7600_send_cmd_str("AT+NETOPEN?", "+NETOPEN: 1", 1, 3000)) {
+		    ESP_LOGW(TAG, "Network is closed or unknown, resetting...");
+		    // ✅ Đóng mạng cũ (nếu có)
+		    sim7600_send_cmd_str("AT+NETCLOSE", "OK", 1, 3000);
+		    vTaskDelay(1000 / portTICK_PERIOD_MS);
+		    // ✅ Mở lại mạng mới
+		    if (!sim7600_send_cmd_str("AT+NETOPEN", "+NETOPEN: 1", 2, 8000)) {
+		        ESP_LOGE(TAG, "Failed to open network");
+		        ok = false;
+		    }
+		}
+		vTaskDelay(800 / portTICK_PERIOD_MS);
         // Có IP chưa?
         if (ok && !sim7600_send_cmd_str("AT+CGPADDR", "+CGPADDR: 1,", 1, 2000)) {
             ESP_LOGW(TAG, "No IP address");
             ok = false;
         }
-
+		vTaskDelay(800 / portTICK_PERIOD_MS);
         if (ok) {
             ESP_LOGI(TAG, "SIM7600 network is ready!");
             return true;
         }
-
         // Chưa sẵn sàng, chờ rồi thử lại
         vTaskDelay(delay_ms / portTICK_PERIOD_MS);
     }
@@ -215,17 +234,20 @@ void sim7600_uart_reader_task(void *arg) {
                 }
             }
         }
+        vTaskDelay(50 / portTICK_PERIOD_MS);
     }
 }
 
 // ---------------- Basic Check ----------------
 bool sim7600_basic_check(void) {
     for (int i = 0; i < 5; i++) {
+		ESP_LOGI("SIM7600", "Start check basic AT");
         if (sim7600_send_cmd_str("AT", "OK", 1, 1000)) {
             ESP_LOGI("SIM7600", "AT OK (basic check pass)");
             sim7600_send_cmd_str("ATE0", "OK", 3, 2000);
             return true;
         }
+        ESP_LOGI("SIM7600","In debug fail, never exit");
         ESP_LOGW("SIM7600", "AT failed, retry %d/5...", i + 1);
         vTaskDelay(2000 / portTICK_PERIOD_MS);
     }
@@ -258,11 +280,13 @@ void sim7600_reset_module(void) {
 
 // ---------------- MQTT ----------------
 bool sim7600_mqtt_start(void) {
-    if (sim7600_send_cmd_str("AT+CMQTTSTART", "OK", 3, 5000)) return true;
+    if (sim7600_send_cmd_str("AT+CMQTTSTART", "OK", 1, 5000)) return true;
     char buf[BUF_SIZE];
     if (strstr(buf, "+CMQTTSTART: 23")) {
-        sim7600_send_cmd_str("AT+CMQTTSTOP", "OK", 3, 3000);
-        return sim7600_send_cmd_str("AT+CMQTTSTART", "OK", 3, 5000);
+		vTaskDelay(500 / portTICK_PERIOD_MS);
+        sim7600_send_cmd_str("AT+CMQTTSTOP", "OK", 1, 3000);
+        vTaskDelay(500 / portTICK_PERIOD_MS);
+        return sim7600_send_cmd_str("AT+CMQTTSTART", "OK", 1, 5000);
     }
     return false;
 }
@@ -272,6 +296,7 @@ bool sim7600_mqtt_connect(const char *client_id, const char *broker, int keepali
     char cmd[128];
     snprintf(cmd, sizeof(cmd), "AT+CMQTTACCQ=0,\"%s\"", client_id);
     if (!sim7600_send_cmd_str(cmd, "OK", 3, 2000)) return false;
+    vTaskDelay(300 / portTICK_PERIOD_MS);
     snprintf(cmd, sizeof(cmd), "AT+CMQTTCONNECT=0,\"%s\",%d,%d,\"\",\"\"", broker, keepalive, cleansession);
     if (!sim7600_send_cmd_str(cmd, "OK", 3, 5000)) return false;
 
@@ -289,11 +314,11 @@ bool sim7600_mqtt_publish(const char *topic, const char *payload, int qos) {
     snprintf(cmd, sizeof(cmd), "AT+CMQTTTOPIC=0,%d", (int)strlen(topic));
     if (!sim7600_send_cmd_str(cmd, ">", 3, 2000)) return false;
     if (!sim7600_send_cmd_str(topic, "OK", 3, 2000)) return false;
-
+	vTaskDelay(500 / portTICK_PERIOD_MS);
     snprintf(cmd, sizeof(cmd), "AT+CMQTTPAYLOAD=0,%d", (int)strlen(payload));
     if (!sim7600_send_cmd_str(cmd, ">", 3, 2000)) return false;
     if (!sim7600_send_cmd_str(payload, "OK", 3, 2000)) return false;
-
+	vTaskDelay(500 / portTICK_PERIOD_MS);
     snprintf(cmd, sizeof(cmd), "AT+CMQTTPUB=0,%d,60", qos);
     return sim7600_send_cmd_str(cmd, "OK", 3, 5000);
 }
