@@ -199,6 +199,7 @@ void mqtt_task(void *pvParameters) {
     int count_send_fail_alert_2 = 0;
     int count_send_fail_alert_3 = 0;
     int count_reconnect = 0;
+    int count_network_fail = 0;
     esp_task_wdt_init(180, true);
     esp_task_wdt_add(NULL);
     esp_task_wdt_status(NULL);
@@ -403,19 +404,42 @@ void mqtt_task(void *pvParameters) {
 
         if (!mqtt_connected) {
 			ESP_LOGI(TAG,"Start Connect MQTT");
-            sim7600_mqtt_reconnect();
-            count_reconnect++;
-            if (count_reconnect == 3){
-				sim7600_reset_module();
-				vTaskDelay(3000 / portTICK_PERIOD_MS);
-				sim7600_basic_check();
-			}
-			if (count_reconnect == 6){
-				sim7600_reset_module();
-				esp_restart();
-			}
+            if (!sim7600_is_network_registered(3, 5000)) {
+                ESP_LOGW(TAG, "Network not ready, delay longer before retrying MQTT...");
+                vTaskDelay(5000 / portTICK_PERIOD_MS);  // đợi thêm
+                count_network_fail++;
+
+                // Nếu quá nhiều lần mà vẫn không có mạng thì reset module
+                if (count_network_fail == 6) {
+                    ESP_LOGE(TAG, "No network after 6 tries -> reset module");
+                    sim7600_reset_module();
+                    vTaskDelay(20000 / portTICK_PERIOD_MS);
+                    sim7600_basic_check();
+                }
+
+                // Nếu vẫn thất bại sau 10 lần thì restart ESP32
+                if (count_network_fail >= 10) {
+                    ESP_LOGE(TAG, "No network after 10 tries -> restart ESP32");
+                    esp_restart();
+                }
+            } else {
+                count_network_fail = 0;
+                vTaskDelay(5000 / portTICK_PERIOD_MS);  // đợi thêm
+                sim7600_mqtt_reconnect();
+                count_reconnect++;
+                if (count_reconnect == 3){
+                    sim7600_reset_module();
+                    vTaskDelay(3000 / portTICK_PERIOD_MS);
+                    sim7600_basic_check();
+                }
+                if (count_reconnect == 6){
+                    sim7600_reset_module();
+                    esp_restart();
+                }
+            }
         } else {
-			 count_reconnect = 0;
+            count_network_fail = 0;
+			count_reconnect = 0;
 		}
 
         // 4️⃣ Delay vòng lặp

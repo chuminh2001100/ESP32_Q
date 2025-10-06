@@ -419,3 +419,17 @@ void handle_mqtt_command(const char *topic, const char *payload) {
         ESP_LOGI(TAG, "Control 3 -> payload: %s", payload);
     }
 }
+
+bool sim7600_is_network_registered(int retry, int delay_ms) {
+    for (int i = 0; i < retry; i++) {
+        // Kiểm tra CREG
+        if (sim7600_send_cmd_str("AT+CREG?", "+CREG: 0,1", 1, 1000) ||
+            sim7600_send_cmd_str("AT+CREG?", "+CREG: 0,5", 1, 1000)) {
+            ESP_LOGI("SIM7600", "Network registered (CREG OK)");
+            return true;
+        }
+        ESP_LOGW("SIM7600", "Network not ready, retry %d/%d", i+1, retry);
+        vTaskDelay(delay_ms / portTICK_PERIOD_MS);
+    }
+    return false;
+}
