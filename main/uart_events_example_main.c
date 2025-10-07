@@ -200,6 +200,12 @@ void mqtt_task(void *pvParameters) {
     int count_send_fail_alert_3 = 0;
     int count_reconnect = 0;
     int count_network_fail = 0;
+    TickType_t last_alert_sent_1 = 0;
+    TickType_t last_alert_sent_2 = 0;
+    TickType_t last_alert_sent_3 = 0;
+
+    // const TickType_t alert_cooldown = 180000 / portTICK_PERIOD_MS; // 3 phút
+    const TickType_t alert_cooldown = 60000 / portTICK_PERIOD_MS; // 1 phút
     esp_task_wdt_init(180, true);
     esp_task_wdt_add(NULL);
     esp_task_wdt_status(NULL);
@@ -338,7 +344,10 @@ void mqtt_task(void *pvParameters) {
         int level = gpio_get_level(ALERT_INPUT_GPIO_1);
         if (level == 0 && debounce_gpio(ALERT_INPUT_GPIO_1, 0, 5, 10)) {
             ESP_LOGI(TAG, "ALERT GPIO detected! Sending MQTT alert from KEY_1...");
-			if (mqtt_connected){
+            TickType_t now = xTaskGetTickCount();
+            if (now - last_alert_sent_1 >= alert_cooldown) {
+                ESP_LOGW(TAG, "Alert sent cooldown passed, sending alert...");
+                if (mqtt_connected){
                   char topic[64];
                   snprintf(topic, sizeof(topic), "smart/devices/%d/info", KEY_1);
                   char content[128];
@@ -353,52 +362,61 @@ void mqtt_task(void *pvParameters) {
 		                }
 		          } else {
 		                count_send_fail_alert = 0;
+                        last_alert_sent_1 = now; // update timestamp
 		          }
-			}
+			}		
             vTaskDelay(1000 / portTICK_PERIOD_MS);
         }
         int level_2 = gpio_get_level(ALERT_INPUT_GPIO_2);
         if (level_2 == 0 && debounce_gpio(ALERT_INPUT_GPIO_2, 0, 5, 10)) {
             ESP_LOGI(TAG, "ALERT GPIO detected! Sending MQTT alert from KEY_2...");
-			if (mqtt_connected){
-                char topic[64];
-                snprintf(topic, sizeof(topic), "smart/devices/%d/info", KEY_2);
-                char content[128];
-                snprintf(content, sizeof(content), "{\"alert\":\"true\", \"alarm_light\":\"true\",\"key\":%d}", KEY_2);
-                if (!sim7600_mqtt_publish(topic, content, 0)) {
-                    ESP_LOGE(TAG, "Alert publish failed -> mark disconnected");
-                    count_send_fail_alert++;
-                    if (count_send_fail_alert >= 3) {
-                        ESP_LOGE(TAG, "3 consecutive send failures -> reconnecting MQTT");
+            if (now - last_alert_sent_2 >= alert_cooldown) {
+                ESP_LOGW(TAG, "Alert sent cooldown passed, sending alert...");
+                if (mqtt_connected){
+                    char topic[64];
+                    snprintf(topic, sizeof(topic), "smart/devices/%d/info", KEY_2);
+                    char content[128];
+                    snprintf(content, sizeof(content), "{\"alert\":\"true\", \"alarm_light\":\"true\",\"key\":%d}", KEY_2);
+                    if (!sim7600_mqtt_publish(topic, content, 0)) {
+                        ESP_LOGE(TAG, "Alert publish failed -> mark disconnected");
+                        count_send_fail_alert++;
+                        if (count_send_fail_alert >= 3) {
+                            ESP_LOGE(TAG, "3 consecutive send failures -> reconnecting MQTT");
+                            count_send_fail_alert = 0;
+                            mqtt_connected = false;
+                        }
+                    } else {
                         count_send_fail_alert = 0;
-                        mqtt_connected = false;
+                        last_alert_sent_2 = now; // update timestamp
                     }
-                } else {
-                    count_send_fail_alert = 0;
-                }
-			}
+			    }
+            }
             vTaskDelay(1000 / portTICK_PERIOD_MS);
         }
         int level_3 = gpio_get_level(ALERT_INPUT_GPIO_3);
         if (level_3 == 0 && debounce_gpio(ALERT_INPUT_GPIO_3, 0, 5, 10)) {
             ESP_LOGI(TAG, "ALERT GPIO detected! Sending MQTT alert from KEY_3...");
-			if (mqtt_connected){
+            if (now - last_alert_sent_3 >= alert_cooldown) {
+                ESP_LOGW(TAG, "Alert sent cooldown passed, sending alert...");
+                if (mqtt_connected){
                     char topic[64];
                     snprintf(topic, sizeof(topic), "smart/devices/%d/info", KEY_3);
                     char content[128];
                     snprintf(content, sizeof(content), "{\"alert\":\"true\", \"alarm_light\":\"true\",\"key\":%d}", KEY_3);
-                if (!sim7600_mqtt_publish(topic, content, 0)) {
-                    ESP_LOGE(TAG, "Alert publish failed -> mark disconnected");
-                    count_send_fail_alert++;
-                    if (count_send_fail_alert >= 3) {
-                        ESP_LOGE(TAG, "3 consecutive send failures -> reconnecting MQTT");
+                    if (!sim7600_mqtt_publish(topic, content, 0)) {
+                        ESP_LOGE(TAG, "Alert publish failed -> mark disconnected");
+                        count_send_fail_alert++;
+                        if (count_send_fail_alert >= 3) {
+                            ESP_LOGE(TAG, "3 consecutive send failures -> reconnecting MQTT");
+                            count_send_fail_alert = 0;
+                            mqtt_connected = false;
+                        }
+                    } else {
                         count_send_fail_alert = 0;
-                        mqtt_connected = false;
+                        last_alert_sent_3 = now; // update timestamp
                     }
-                } else {
-                    count_send_fail_alert = 0;
-                }
-			}
+			    }
+            }
             vTaskDelay(1000 / portTICK_PERIOD_MS);
         }
 
