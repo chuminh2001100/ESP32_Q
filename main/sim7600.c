@@ -156,6 +156,7 @@ bool sim7600_ready_for_mqtt_retry(int retries, int delay_ms) {
 
 void sim7600_uart_reader_task(void *arg) {
     uint8_t rx_buf[BUF_SIZE];
+    static char urc_buffer[4096]; // chứa dữ liệu tạm
     int len;
 
     while (1) {
@@ -167,127 +168,92 @@ void sim7600_uart_reader_task(void *arg) {
 
             if (sim7600_waiting_resp) {
                 strncpy(sim7600_rx_buffer, (char*)rx_buf, BUF_SIZE);
-                xSemaphoreGive(sim7600_resp_sem); // báo task gửi biết có phản hồi
-            } else {
-                // xử lý URC trực tiếp
-			    if (strstr((char*)rx_buf, "+CMQTTDISC:")) {
-                    sim7600_event_t ev = { .type = SIM7600_EVENT_MQTT_DISCONNECTED };
-                    if (sim7600_event_queue)
-                        xQueueSend(sim7600_event_queue, &ev, 0);
-                }
-			    else if (strstr((char*)rx_buf, "+SIMCARD: NOT AVAILABLE")) {
-                    sim7600_event_t ev = { .type = SIM7600_EVENT_MQTT_DISCONNECTED };
-                    if (sim7600_event_queue){
-                        xQueueSend(sim7600_event_queue, &ev, 0);
+                xSemaphoreGive(sim7600_resp_sem);
+                continue;
+            }
+
+            // --- Ghép dữ liệu vào buffer URC ---
+            strncat(urc_buffer, (char*)rx_buf, sizeof(urc_buffer) - strlen(urc_buffer) - 1);
+
+            // --- Xử lý từng khối +CMQTTRXSTART ... +CMQTTRXEND nếu đủ ---
+            char *start = strstr(urc_buffer, "+CMQTTRXSTART:");
+            while (start) {
+                char *end = strstr(start, "+CMQTTRXEND:");
+                if (!end) break; // chưa đủ -> chờ thêm
+
+                // cắt đoạn nguyên bản tin
+                char message[2048];
+                int msg_len = end - start + strlen("+CMQTTRXEND:") + 1;
+                strncpy(message, start, msg_len);
+                message[msg_len] = '\0';
+
+                // --- Parse topic + payload ---
+                char topic[128] = {0};
+                char payload[512] = {0};
+                char *t_start = strstr(message, "+CMQTTRXTOPIC:");
+                char *p_start = strstr(message, "+CMQTTRXPAYLOAD:");
+
+                if (t_start) {
+                    char *t_line = strstr(t_start, "\r\n");
+                    if (t_line) {
+                        t_line += 2;
+                        char *t_end = strstr(t_line, "\r\n");
+                        if (t_end) *t_end = '\0';
+                        strncpy(topic, t_line, sizeof(topic) - 1);
                     }
                 }
-			    else if (strstr((char*)rx_buf, "+CIPEVENT: NETWORK CLOSED UNEXPECTEDLY")) {
-                    sim7600_event_t ev = { .type = SIM7600_EVENT_MQTT_DISCONNECTED };
-                    if (sim7600_event_queue){
-                        xQueueSend(sim7600_event_queue, &ev, 0);
+                if (p_start) {
+                    char *p_line = strstr(p_start, "\r\n");
+                    if (p_line) {
+                        p_line += 2;
+                        char *p_end = strstr(p_line, "\r\n");
+                        if (p_end) *p_end = '\0';
+                        strncpy(payload, p_line, sizeof(payload) - 1);
                     }
                 }
-			    else if (strstr((char*)rx_buf, "+CMQTTNONET")) {
-                    sim7600_event_t ev = { .type = SIM7600_EVENT_MQTT_DISCONNECTED };
-                    if (sim7600_event_queue){
-                        xQueueSend(sim7600_event_queue, &ev, 0);
-                    }
-                }                         
-                else if (strstr((char*)rx_buf, "+CMQTTCONNECT:")) {
-                    int client_id = -1, result = -1;
-                    sscanf((char*)rx_buf, "+CMQTTCONNECT: %d,%d", &client_id, &result);
-                
-                    if (result == 0) {
-                        // ✅ Kết nối thành công
-                        sim7600_event_t ev = { .type = SIM7600_EVENT_MQTT_CONNECTED };
-                        if (sim7600_event_queue)
-                            xQueueSend(sim7600_event_queue, &ev, 0);
-                    } else {
-                        // Các mã lỗi MQTT: 1,2,3,4,5,25...
-                        sim7600_event_t ev = { .type = SIM7600_EVENT_MQTT_DISCONNECTED };
-                        if (sim7600_event_queue)
-                            xQueueSend(sim7600_event_queue, &ev, 0);
-                        ESP_LOGW(TAG, "MQTT connect failed, result=%d", result);
-                    }
-                }                             
-                else if (strstr((char*)rx_buf, "+CMQTTSUBRECV:")) {
-                    // format: +CMQTTSUBRECV: 0,14,"device/ctrl/1",5,"ON"
-                    char topic[64] = {0};
-                    char payload[128] = {0};
-                    if (parse_mqtt_urc((char*)rx_buf, topic, payload)) {
-                        ESP_LOGI(TAG, "MQTT message received: topic=%s payload=%s", topic, payload);
-                        handle_mqtt_command(topic, payload);
-                
-                        // Gửi event cho task chính
-                        sim7600_event_t ev = {
-                            .type = SIM7600_EVENT_MQTT_SUBRECV
-                        };
-                        strncpy(ev.topic, topic, sizeof(ev.topic));
-                        strncpy(ev.payload, payload, sizeof(ev.payload));
-                
-                        if (sim7600_event_queue)
-                            xQueueSend(sim7600_event_queue, &ev, 0);
-                    } else {
-                        ESP_LOGW(TAG, "Failed to parse +CMQTTSUBRECV URC");
-                    }
-                }
-                else if (strstr((char*)rx_buf, "+CMQTTRXSTART:")) {
-                    mqtt_rx_state.receiving = true;
-                    mqtt_rx_state.topic[0] = '\0';
-                    mqtt_rx_state.payload[0] = '\0';
-                    mqtt_rx_state.topic_len_received = 0;
-                    mqtt_rx_state.payload_len_received = 0;
-            
-                    sscanf((char*)rx_buf, "+CMQTTRXSTART: %*d,%d,%d",
-                           &mqtt_rx_state.topic_len_expected,
-                           &mqtt_rx_state.payload_len_expected);
-            
-                    ESP_LOGI(TAG, "Start receiving MQTT message (topic_len=%d, payload_len=%d)",
-                             mqtt_rx_state.topic_len_expected,
-                             mqtt_rx_state.payload_len_expected);
-                }
-                else if (strstr((char*)rx_buf, "+CMQTTRXTOPIC:")) {
-                    int sub_len = 0;
-                    sscanf((char*)rx_buf, "+CMQTTRXTOPIC: %*d,%d", &sub_len);
-                    // topic nằm ở dòng sau
-                    char *topic_content = strstr((char*)rx_buf, "\r\n");
-                    if (topic_content) {
-                        topic_content += 2;
-                        strncat(mqtt_rx_state.topic, topic_content, sizeof(mqtt_rx_state.topic) - 1);
-                        mqtt_rx_state.topic_len_received += strlen(topic_content);
-                    }
-                }
-                else if (strstr((char*)rx_buf, "+CMQTTRXPAYLOAD:")) {
-                    int sub_len = 0;
-                    sscanf((char*)rx_buf, "+CMQTTRXPAYLOAD: %*d,%d", &sub_len);
-                    // payload nằm ở dòng sau
-                    char *payload_content = strstr((char*)rx_buf, "\r\n");
-                    if (payload_content) {
-                        payload_content += 2;
-                        strncat(mqtt_rx_state.payload, payload_content, sizeof(mqtt_rx_state.payload) - 1);
-                        mqtt_rx_state.payload_len_received += strlen(payload_content);
-                    }
-                }
-                else if (strstr((char*)rx_buf, "+CMQTTRXEND:")) {
-                    // Kết thúc gói tin => gửi event cho task chính
-                    mqtt_rx_state.receiving = false;
-                    ESP_LOGI(TAG, "MQTT RX done: topic=%s payload=%s",
-                             mqtt_rx_state.topic, mqtt_rx_state.payload);
-            
-                    sim7600_event_t ev = {
-                        .type = SIM7600_EVENT_MQTT_SUBRECV
-                    };
-                    strncpy(ev.topic, mqtt_rx_state.topic, sizeof(ev.topic));
-                    strncpy(ev.payload, mqtt_rx_state.payload, sizeof(ev.payload));
-            
-                    if (sim7600_event_queue)
-                        xQueueSend(sim7600_event_queue, &ev, 0);
-                }
+
+                ESP_LOGI(TAG, "✅ MQTT RX (multi-line): topic=%s, payload=%s", topic, payload);
+
+                // --- Gửi event cho task chính ---
+                sim7600_event_t ev = {
+                    .type = SIM7600_EVENT_MQTT_SUBRECV
+                };
+                strncpy(ev.topic, topic, sizeof(ev.topic));
+                strncpy(ev.payload, payload, sizeof(ev.payload));
+                if (sim7600_event_queue)
+                    xQueueSend(sim7600_event_queue, &ev, 0);
+
+                // --- Xóa phần đã xử lý ---
+                memmove(urc_buffer, end + strlen("+CMQTTRXEND:"), strlen(end + strlen("+CMQTTRXEND:")) + 1);
+                start = strstr(urc_buffer, "+CMQTTRXSTART:");
+            }
+
+            // --- Nếu không phải MQTT, xử lý các URC khác ---
+            if (strstr((char*)rx_buf, "+CMQTTDISC:") ||
+                strstr((char*)rx_buf, "+CMQTTCONNLOST:") ||
+                strstr((char*)rx_buf, "+CMQTTNONET") ||
+                strstr((char*)rx_buf, "+CIPEVENT: NETWORK CLOSED UNEXPECTEDLY") ||
+                strstr((char*)rx_buf, "+SIMCARD: NOT AVAILABLE")) {
+                sim7600_event_t ev = { .type = SIM7600_EVENT_MQTT_DISCONNECTED };
+                if (sim7600_event_queue)
+                    xQueueSend(sim7600_event_queue, &ev, 0);
+            }
+            else if (strstr((char*)rx_buf, "+CMQTTCONNECT:")) {
+                int client_id = -1, result = -1;
+                sscanf((char*)rx_buf, "+CMQTTCONNECT: %d,%d", &client_id, &result);
+                sim7600_event_t ev = {
+                    .type = (result == 0) ? SIM7600_EVENT_MQTT_CONNECTED : SIM7600_EVENT_MQTT_DISCONNECTED
+                };
+                if (sim7600_event_queue)
+                    xQueueSend(sim7600_event_queue, &ev, 0);
+                ESP_LOGI(TAG, "MQTT connect result=%d", result);
             }
         }
-        vTaskDelay(50 / portTICK_PERIOD_MS);
+
+        vTaskDelay(20 / portTICK_PERIOD_MS);
     }
 }
+
 
 // ---------------- Basic Check ----------------
 bool sim7600_basic_check(void) {

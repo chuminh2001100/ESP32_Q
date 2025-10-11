@@ -191,7 +191,9 @@ void sim7600_mqtt_reconnect() {
 // ---------------- MQTT Task ----------------
 void mqtt_task(void *pvParameters) {
     const TickType_t heartbeat_interval = 300000 / portTICK_PERIOD_MS; // 5 phút
-    TickType_t last_heartbeat = 0;
+    TickType_t last_heartbeat_1 = 0;
+    TickType_t last_heartbeat_2 = 0;
+    TickType_t last_heartbeat_3 = 0;
     int count_send_fail = 0;
     int count_send_fail_2 = 0;
     int count_send_fail_3 = 0;
@@ -212,7 +214,7 @@ void mqtt_task(void *pvParameters) {
     esp_task_wdt_reset();
     while (1) {
         // 2️⃣ Gửi heartbeat mỗi 5 phút
-        if (mqtt_connected && (xTaskGetTickCount() - last_heartbeat >= heartbeat_interval)) {
+        if (mqtt_connected && (xTaskGetTickCount() - last_heartbeat_1 >= heartbeat_interval)) {
             ESP_LOGI(TAG, "Sending heartbeat...");
             char topic[64];
             snprintf(topic, sizeof(topic), "smart/devices/%d/lastactive", KEY_1);
@@ -229,7 +231,7 @@ void mqtt_task(void *pvParameters) {
             } else {
                 ESP_LOGI(TAG, "Heartbeat publish success for KEY_1");
                 count_send_fail = 0;
-                last_heartbeat = xTaskGetTickCount();
+                last_heartbeat_1 = xTaskGetTickCount();
             }
             float vbat = read_battery_voltage();
             ESP_LOGI(TAG, "Battery voltage: %.2f V", vbat); 
@@ -250,12 +252,12 @@ void mqtt_task(void *pvParameters) {
             } else {
                 ESP_LOGI(TAG, "Battery publish success for KEY_1");
                 count_send_fail = 0;
-                last_heartbeat = xTaskGetTickCount();
+                last_heartbeat_1 = xTaskGetTickCount();
             }
         }
 
         // Gửi heartbeat cho key 2
-        if (mqtt_connected && (xTaskGetTickCount() - last_heartbeat >= heartbeat_interval && KEY_2 != KEY_1)) {
+        if (mqtt_connected && (xTaskGetTickCount() - last_heartbeat_2 >= heartbeat_interval && KEY_2 != KEY_1)) {
             ESP_LOGI(TAG, "Sending heartbeat for KEY_2...");
             char topic[64];
             snprintf(topic, sizeof(topic), "smart/devices/%d/lastactive", KEY_2);
@@ -272,7 +274,7 @@ void mqtt_task(void *pvParameters) {
             } else {
                 ESP_LOGI(TAG, "Heartbeat publish success for KEY_2");
                 count_send_fail_2 = 0;
-                last_heartbeat = xTaskGetTickCount();
+                last_heartbeat_2 = xTaskGetTickCount();
             }
             float vbat = read_battery_voltage();
             ESP_LOGI(TAG, "Battery voltage: %.2f V", vbat);
@@ -293,12 +295,12 @@ void mqtt_task(void *pvParameters) {
             } else {
                 ESP_LOGI(TAG, "Battery publish success for KEY_2");
                 count_send_fail_2 = 0;
-                last_heartbeat = xTaskGetTickCount();
+                last_heartbeat_2 = xTaskGetTickCount();
             }
         }
 
         // Gửi heartbeat cho key 3
-        if (mqtt_connected && (xTaskGetTickCount() - last_heartbeat >= heartbeat_interval && KEY_3 != KEY_1)) {
+        if (mqtt_connected && (xTaskGetTickCount() - last_heartbeat_3 >= heartbeat_interval && KEY_3 != KEY_1)) {
             ESP_LOGI(TAG, "Sending heartbeat for KEY_3...");
             char topic[64];
             snprintf(topic, sizeof(topic), "smart/devices/%d/lastactive", KEY_3);
@@ -315,7 +317,7 @@ void mqtt_task(void *pvParameters) {
             } else {
                 ESP_LOGI(TAG, "Heartbeat publish success for KEY_3");
                 count_send_fail_3 = 0;
-                last_heartbeat = xTaskGetTickCount();
+                last_heartbeat_3 = xTaskGetTickCount();
             }
             float vbat = read_battery_voltage();
             ESP_LOGI(TAG, "Battery voltage: %.2f V", vbat);
@@ -336,7 +338,7 @@ void mqtt_task(void *pvParameters) {
             } else {
                 ESP_LOGI(TAG, "Battery publish success for KEY_3");
                 count_send_fail_3 = 0;
-                last_heartbeat = xTaskGetTickCount();
+                last_heartbeat_3 = xTaskGetTickCount();
             }
         }
 
@@ -486,7 +488,9 @@ static void gpio_app_init(void) {
     };
     gpio_config(&in_conf);
     
-
+    gpio_set_level(RESET_OUTPUT_GPIO_1, 1);
+    gpio_set_level(RESET_OUTPUT_GPIO_2, 1);
+    gpio_set_level(RESET_OUTPUT_GPIO_3, 1);
     // Output RESET
     gpio_config_t out_conf = {
         .pin_bit_mask = 1ULL << RESET_OUTPUT_GPIO_1 | 1ULL << RESET_OUTPUT_GPIO_2 | 1ULL << RESET_OUTPUT_GPIO_3,

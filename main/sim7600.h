@@ -70,4 +70,5 @@ bool sim7600_mqtt_subscribe(const char *topic, int qos);
 bool sim7600_is_network_registered(int retry, int delay_ms);
 bool sim7600_check_signal_expect(void);
 bool sim7600_check_sim_ready(int retry, int delay_ms);
+bool parse_mqtt_urc(const char *urc, char *topic_out, char *payload_out);
 #endif // SIM7600_H
