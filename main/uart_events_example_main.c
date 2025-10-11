@@ -364,12 +364,14 @@ void mqtt_task(void *pvParameters) {
 		                count_send_fail_alert = 0;
                         last_alert_sent_1 = now; // update timestamp
 		          }
-			}		
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
+			    }		
+                vTaskDelay(1000 / portTICK_PERIOD_MS);
+            }
         }
         int level_2 = gpio_get_level(ALERT_INPUT_GPIO_2);
         if (level_2 == 0 && debounce_gpio(ALERT_INPUT_GPIO_2, 0, 5, 10)) {
             ESP_LOGI(TAG, "ALERT GPIO detected! Sending MQTT alert from KEY_2...");
+            TickType_t now = xTaskGetTickCount();
             if (now - last_alert_sent_2 >= alert_cooldown) {
                 ESP_LOGW(TAG, "Alert sent cooldown passed, sending alert...");
                 if (mqtt_connected){
@@ -396,6 +398,7 @@ void mqtt_task(void *pvParameters) {
         int level_3 = gpio_get_level(ALERT_INPUT_GPIO_3);
         if (level_3 == 0 && debounce_gpio(ALERT_INPUT_GPIO_3, 0, 5, 10)) {
             ESP_LOGI(TAG, "ALERT GPIO detected! Sending MQTT alert from KEY_3...");
+            TickType_t now = xTaskGetTickCount();
             if (now - last_alert_sent_3 >= alert_cooldown) {
                 ESP_LOGW(TAG, "Alert sent cooldown passed, sending alert...");
                 if (mqtt_connected){
@@ -422,6 +425,8 @@ void mqtt_task(void *pvParameters) {
 
         if (!mqtt_connected) {
 			ESP_LOGI(TAG,"Start Connect MQTT");
+			sim7600_check_signal_expect();
+			sim7600_check_sim_ready(5, 2000);
             if (!sim7600_is_network_registered(3, 5000)) {
                 ESP_LOGW(TAG, "Network not ready, delay longer before retrying MQTT...");
                 vTaskDelay(5000 / portTICK_PERIOD_MS);  // đợi thêm
@@ -524,12 +529,14 @@ void app_main(void) {
 	    vTaskDelay(5000 / portTICK_PERIOD_MS);
 	
 	    sim_ok = sim7600_basic_check();
+	    sim7600_check_signal_expect();
 	    if (!sim_ok) {
 	        ESP_LOGW(TAG, "Still no response -> powering ON SIM7600 (2nd try)...");
 	        sim7600_power_on();
 	        vTaskDelay(5000 / portTICK_PERIOD_MS);
-	
+		
 	        sim_ok = sim7600_basic_check();
+	        sim7600_check_signal_expect();
 	        if (!sim_ok) {
 	            ESP_LOGE(TAG, "SIM7600 FAILED after 2 retries -> restarting ESP32...");
 	            vTaskDelay(2000 / portTICK_PERIOD_MS);

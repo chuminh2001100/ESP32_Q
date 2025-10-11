@@ -335,8 +335,8 @@ bool sim7600_mqtt_subscribe(const char *topic, int qos) {
 
     // Bước 3: thực hiện lệnh subscribe
     // msgid = 1, timeout = 60
-    snprintf(cmd, sizeof(cmd), "AT+CMQTTSUB=0,1,60");
-    if (!sim7600_send_cmd_str(cmd, "+CMQTTSUB: 0,0", 1, 5000)) return false;
+    snprintf(cmd, sizeof(cmd), "AT+CMQTTSUB=0");
+    if (!sim7600_send_cmd_str(cmd, "OK", 1, 5000)) return false;
 
     // Có thể đợi URC: +CMQTTSUB: 0,0 báo subscribe thành công (nếu muốn)
     return true;
@@ -431,5 +431,41 @@ bool sim7600_is_network_registered(int retry, int delay_ms) {
         ESP_LOGW("SIM7600", "Network not ready, retry %d/%d", i+1, retry);
         vTaskDelay(delay_ms / portTICK_PERIOD_MS);
     }
+    return false;
+}
+
+bool sim7600_check_signal_expect(void) {
+    ESP_LOGI("SIM7600", "Checking signal strength...");
+    // Lệnh AT+CSQ sẽ trả về dạng "+CSQ: x,y"
+    if (sim7600_send_cmd_str("AT+CSQ", "+CSQ:", 1, 1000)) {
+        ESP_LOGI("SIM7600", "Signal strength command OK (+CSQ received)");
+        return true;
+    } else {
+        ESP_LOGW("SIM7600", "Failed to get signal strength (+CSQ not found)");
+        return false;
+    }
+}
+
+
+bool sim7600_check_sim_ready(int retry, int delay_ms) {
+    for (int i = 0; i < retry; i++) {
+        if (sim7600_send_cmd_str("AT+CPIN?", "+CPIN: READY", 1, 1000)) {
+            ESP_LOGI("SIM7600", "✅ SIM sẵn sàng (+CPIN: READY)");
+            return true;
+        } else if (sim7600_send_cmd_str("AT+CPIN?", "+CPIN: SIM PIN", 1, 1000)) {
+            ESP_LOGE("SIM7600", "🔐 SIM bị khóa PIN! Cần nhập mã PIN.");
+            return false;
+        } else if (sim7600_send_cmd_str("AT+CPIN?", "+CPIN: SIM PUK", 1, 1000)) {
+            ESP_LOGE("SIM7600", "🔐 SIM bị khóa PUK! Cần nhập mã PUK.");
+            return false;
+        } else if (sim7600_send_cmd_str("AT+CPIN?", "+CPIN: NOT INSERTED", 1, 1000)) {
+            ESP_LOGE("SIM7600", "❌ sim not inserted!");
+            return false;
+        } else {
+            ESP_LOGW("SIM7600", "Sim not ready %d/%d", i + 1, retry);
+            vTaskDelay(delay_ms / portTICK_PERIOD_MS);
+        }
+    }
+    ESP_LOGE("SIM7600", "❌ SIM không sẵn sàng sau %d lần thử!", retry);
     return false;
 }

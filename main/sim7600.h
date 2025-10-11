@@ -67,5 +67,7 @@ bool sim7600_mqtt_disconnect(void);
 void sim7600_uart_reader_task(void *arg);
 void sim7600_set_event_queue(QueueHandle_t queue);
 bool sim7600_mqtt_subscribe(const char *topic, int qos);
-bool sim7600_is_network_registered(int retry, int delay_ms)
+bool sim7600_is_network_registered(int retry, int delay_ms);
+bool sim7600_check_signal_expect(void);
+bool sim7600_check_sim_ready(int retry, int delay_ms);
 #endif // SIM7600_H
