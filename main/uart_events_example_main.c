@@ -67,18 +67,21 @@ void sim7600_event_task(void *param) {
                         ESP_LOGI("MQTT_TASK", "CMD1 -> toggle LED");
                         gpio_set_level(RESET_OUTPUT_GPIO_1, 0);
                         vTaskDelay(1000 / portTICK_PERIOD_MS);
+                        gpio_set_level(RESET_OUTPUT_GPIO_1, 1);
                         // xử lý action 1
                     } 
                     else if (strcmp(evt.topic, topic_check_2) == 0) {
                         ESP_LOGI("MQTT_TASK", "CMD2 -> reset SIM");
                         gpio_set_level(RESET_OUTPUT_GPIO_2, 0);
                         vTaskDelay(1000 / portTICK_PERIOD_MS);
+                        gpio_set_level(RESET_OUTPUT_GPIO_2, 1);
                         // xử lý action 2
                     } 
                     else if (strcmp(evt.topic, topic_check_3) == 0) {
                         ESP_LOGI("MQTT_TASK", "CMD3 -> custom action");
                         gpio_set_level(RESET_OUTPUT_GPIO_3, 0);
                         vTaskDelay(1000 / portTICK_PERIOD_MS);
+                        gpio_set_level(RESET_OUTPUT_GPIO_3, 1);
                         // xử lý action 3
                     }
                     break;
@@ -208,7 +211,7 @@ void mqtt_task(void *pvParameters) {
 
     // const TickType_t alert_cooldown = 180000 / portTICK_PERIOD_MS; // 3 phút
     const TickType_t alert_cooldown = 60000 / portTICK_PERIOD_MS; // 1 phút
-    esp_task_wdt_init(180, true);
+    esp_task_wdt_init(150, true);
     esp_task_wdt_add(NULL);
     esp_task_wdt_status(NULL);
     esp_task_wdt_reset();
@@ -233,6 +236,7 @@ void mqtt_task(void *pvParameters) {
                 count_send_fail = 0;
                 last_heartbeat_1 = xTaskGetTickCount();
             }
+            vTaskDelay(1500 / portTICK_PERIOD_MS);
             float vbat = read_battery_voltage();
             ESP_LOGI(TAG, "Battery voltage: %.2f V", vbat); 
             float percent = voltageToPercent(vbat, 3.5, 4.2);
@@ -276,6 +280,7 @@ void mqtt_task(void *pvParameters) {
                 count_send_fail_2 = 0;
                 last_heartbeat_2 = xTaskGetTickCount();
             }
+            vTaskDelay(1500 / portTICK_PERIOD_MS);
             float vbat = read_battery_voltage();
             ESP_LOGI(TAG, "Battery voltage: %.2f V", vbat);
             float percent = voltageToPercent(vbat, 3.5, 4.2);
@@ -319,6 +324,7 @@ void mqtt_task(void *pvParameters) {
                 count_send_fail_3 = 0;
                 last_heartbeat_3 = xTaskGetTickCount();
             }
+            vTaskDelay(1500 / portTICK_PERIOD_MS);
             float vbat = read_battery_voltage();
             ESP_LOGI(TAG, "Battery voltage: %.2f V", vbat);
             float percent = voltageToPercent(vbat, 3.5, 4.2);
@@ -488,9 +494,9 @@ static void gpio_app_init(void) {
     };
     gpio_config(&in_conf);
     
-    gpio_set_level(RESET_OUTPUT_GPIO_1, 1);
-    gpio_set_level(RESET_OUTPUT_GPIO_2, 1);
-    gpio_set_level(RESET_OUTPUT_GPIO_3, 1);
+    gpio_set_level(ALERT_INPUT_GPIO_1, 1);
+    gpio_set_level(ALERT_INPUT_GPIO_2, 1);
+    gpio_set_level(ALERT_INPUT_GPIO_3, 1);
     // Output RESET
     gpio_config_t out_conf = {
         .pin_bit_mask = 1ULL << RESET_OUTPUT_GPIO_1 | 1ULL << RESET_OUTPUT_GPIO_2 | 1ULL << RESET_OUTPUT_GPIO_3,
