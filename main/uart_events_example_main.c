@@ -11,7 +11,7 @@
 #define ALERT_INPUT_GPIO_1   GPIO_NUM_27   // input trigger
 #define ALERT_INPUT_GPIO_2   GPIO_NUM_25  // input trigger
 #define ALERT_INPUT_GPIO_3   GPIO_NUM_32   // input trigger
-#define RESET_OUTPUT_GPIO_1  GPIO_NUM_13  // output reset
+#define RESET_OUTPUT_GPIO_1  GPIO_NUM_14  // output reset
 #define RESET_OUTPUT_GPIO_2  GPIO_NUM_26
 #define RESET_OUTPUT_GPIO_3  GPIO_NUM_33
 #define KEY_1               123456
