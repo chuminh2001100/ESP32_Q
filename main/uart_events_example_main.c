@@ -92,7 +92,12 @@ void sim7600_event_task(void *param) {
                 case SIM7600_EVENT_NETWORK_LOST:
                     ESP_LOGW(TAG, "[EVENT] Network Lost!");
                     break;
-
+                case SIM7600_EVENT_MQTT_PUB_SUCCESS:
+                    ESP_LOGI(TAG, "[EVENT] MQTT Publish Success!");
+                    break;
+                case SIM7600_EVENT_MQTT_PUB_FAILED:
+                    ESP_LOGE(TAG, "[EVENT] MQTT Publish Failed!");
+                    break;    
                 case SIM7600_EVENT_NETWORK_READY:
                     ESP_LOGI(TAG, "[EVENT] Network Ready!");
                     break;
@@ -248,7 +253,7 @@ void mqtt_task(void *pvParameters) {
             if (!sim7600_mqtt_publish(topic_battery, content_battery, 1 )) {
                 ESP_LOGE(TAG, "Battery publish failed -> mark disconnected");
                 count_send_fail++;
-                vTaskDelay(1000 / portTICK_PERIOD_MS);
+                vTaskDelay(1500 / portTICK_PERIOD_MS);
                 if (count_send_fail >= 5) {
                     ESP_LOGE(TAG, "5 consecutive send failures -> reconnecting MQTT");
                     count_send_fail = 0;
@@ -256,7 +261,7 @@ void mqtt_task(void *pvParameters) {
                 } 
             } else {
                 ESP_LOGI(TAG, "Battery publish success for KEY_1");
-                vTaskDelay(1000 / portTICK_PERIOD_MS);
+                vTaskDelay(1500 / portTICK_PERIOD_MS);
                 count_send_fail = 0;
                 last_heartbeat_1 = xTaskGetTickCount();
             }
@@ -272,7 +277,7 @@ void mqtt_task(void *pvParameters) {
             if (!sim7600_mqtt_publish(topic, content, 1)) {
                 ESP_LOGE(TAG, "Heartbeat publish failed -> mark disconnected");
                 count_send_fail_2++;
-                vTaskDelay(1000 / portTICK_PERIOD_MS);
+                vTaskDelay(1500 / portTICK_PERIOD_MS);
                 if (count_send_fail_2 >= 5) {
                     ESP_LOGE(TAG, "5 consecutive send failures -> reconnecting MQTT");
                     count_send_fail_2 = 0;
@@ -280,7 +285,7 @@ void mqtt_task(void *pvParameters) {
                 } 
             } else {
                 ESP_LOGI(TAG, "Heartbeat publish success for KEY_2");
-                vTaskDelay(1000 / portTICK_PERIOD_MS);
+                vTaskDelay(1500 / portTICK_PERIOD_MS);
                 count_send_fail_2 = 0;
                 last_heartbeat_2 = xTaskGetTickCount();
             }
@@ -296,7 +301,7 @@ void mqtt_task(void *pvParameters) {
             if (!sim7600_mqtt_publish(topic_battery, content_battery, 1)) {
                 ESP_LOGE(TAG, "Battery publish failed -> mark disconnected");
                 count_send_fail_2++;
-                vTaskDelay(1000 / portTICK_PERIOD_MS);
+                vTaskDelay(1500 / portTICK_PERIOD_MS);
                 if (count_send_fail_2 >= 5) {
                     ESP_LOGE(TAG, "5 consecutive send failures -> reconnecting MQTT");
                     count_send_fail_2 = 0;
@@ -304,7 +309,7 @@ void mqtt_task(void *pvParameters) {
                 } 
             } else {
                 ESP_LOGI(TAG, "Battery publish success for KEY_2");
-                vTaskDelay(1000 / portTICK_PERIOD_MS);
+                vTaskDelay(1500 / portTICK_PERIOD_MS);
                 count_send_fail_2 = 0;
                 last_heartbeat_2 = xTaskGetTickCount();
             }
@@ -319,7 +324,7 @@ void mqtt_task(void *pvParameters) {
             snprintf(content, sizeof(content), "{\"status\":\"alive\",\"key\":%d}", KEY_3);
             if (!sim7600_mqtt_publish(topic, content, 1)) {
                 ESP_LOGE(TAG, "Heartbeat publish failed -> mark disconnected");
-                vTaskDelay(1000 / portTICK_PERIOD_MS);
+                vTaskDelay(1500 / portTICK_PERIOD_MS);
                 count_send_fail_3++;
                 if (count_send_fail_3 >= 5) {
                     ESP_LOGE(TAG, "5 consecutive send failures -> reconnecting MQTT");
@@ -328,7 +333,7 @@ void mqtt_task(void *pvParameters) {
                 } 
             } else {
                 ESP_LOGI(TAG, "Heartbeat publish success for KEY_3");
-                vTaskDelay(1000 / portTICK_PERIOD_MS);
+                vTaskDelay(1500 / portTICK_PERIOD_MS);
                 count_send_fail_3 = 0;
                 last_heartbeat_3 = xTaskGetTickCount();
             }
@@ -344,7 +349,7 @@ void mqtt_task(void *pvParameters) {
             if (!sim7600_mqtt_publish(topic_battery, content_battery, 1)) {
                 ESP_LOGE(TAG, "Battery publish failed -> mark disconnected");
                 count_send_fail_3++;
-                vTaskDelay(1000 / portTICK_PERIOD_MS);
+                vTaskDelay(1500 / portTICK_PERIOD_MS);
                 if (count_send_fail_3 >= 5) {
                     ESP_LOGE(TAG, "5 consecutive send failures -> reconnecting MQTT");
                     count_send_fail_3 = 0;
@@ -352,7 +357,7 @@ void mqtt_task(void *pvParameters) {
                 } 
             } else {
                 ESP_LOGI(TAG, "Battery publish success for KEY_3");
-                vTaskDelay(1000 / portTICK_PERIOD_MS);
+                vTaskDelay(1500 / portTICK_PERIOD_MS);
                 count_send_fail_3 = 0;
                 last_heartbeat_3 = xTaskGetTickCount();
             }
@@ -373,19 +378,19 @@ void mqtt_task(void *pvParameters) {
 				  if (!sim7600_mqtt_publish(topic, content, 0)) {
 		                ESP_LOGE(TAG, "Alert publish failed -> mark disconnected");
 		                count_send_fail_alert++;
-                        vTaskDelay(1000 / portTICK_PERIOD_MS);
+                        vTaskDelay(1500 / portTICK_PERIOD_MS);
 		                if (count_send_fail_alert >= 3) {
 		                    ESP_LOGE(TAG, "3 consecutive send failures -> reconnecting MQTT");
 		                    count_send_fail_alert = 0;
                             mqtt_connected = false;
 		                }
 		          } else {
-                        vTaskDelay(1000 / portTICK_PERIOD_MS);
+                        vTaskDelay(1500 / portTICK_PERIOD_MS);
 		                count_send_fail_alert = 0;
                         last_alert_sent_1 = now; // update timestamp
 		          }
 			    }		
-                vTaskDelay(1000 / portTICK_PERIOD_MS);
+                vTaskDelay(1500 / portTICK_PERIOD_MS);
             }
         }
         int level_2 = gpio_get_level(ALERT_INPUT_GPIO_2);
@@ -402,14 +407,14 @@ void mqtt_task(void *pvParameters) {
                     if (!sim7600_mqtt_publish(topic, content, 0)) {
                         ESP_LOGE(TAG, "Alert publish failed -> mark disconnected");
                         count_send_fail_alert++;
-                        vTaskDelay(1000 / portTICK_PERIOD_MS);
+                        vTaskDelay(1500 / portTICK_PERIOD_MS);
                         if (count_send_fail_alert >= 3) {
                             ESP_LOGE(TAG, "3 consecutive send failures -> reconnecting MQTT");
                             count_send_fail_alert = 0;
                             mqtt_connected = false;
                         }
                     } else {
-                        vTaskDelay(1000 / portTICK_PERIOD_MS);
+                        vTaskDelay(1500 / portTICK_PERIOD_MS);
                         count_send_fail_alert = 0;
                         last_alert_sent_2 = now; // update timestamp
                     }
@@ -431,20 +436,20 @@ void mqtt_task(void *pvParameters) {
                     if (!sim7600_mqtt_publish(topic, content, 0)) {
                         ESP_LOGE(TAG, "Alert publish failed -> mark disconnected");
                         count_send_fail_alert++;
-                        vTaskDelay(1000 / portTICK_PERIOD_MS);
+                        vTaskDelay(1500 / portTICK_PERIOD_MS);
                         if (count_send_fail_alert >= 3) {
                             ESP_LOGE(TAG, "3 consecutive send failures -> reconnecting MQTT");
                             count_send_fail_alert = 0;
                             mqtt_connected = false;
                         }
                     } else {
-                        vTaskDelay(1000 / portTICK_PERIOD_MS);
+                        vTaskDelay(1500 / portTICK_PERIOD_MS);
                         count_send_fail_alert = 0;
                         last_alert_sent_3 = now; // update timestamp
                     }
 			    }
             }
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            vTaskDelay(1500 / portTICK_PERIOD_MS);
         }
 
         if (!mqtt_connected) {

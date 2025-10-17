@@ -240,17 +240,35 @@ void sim7600_uart_reader_task(void *arg) {
             }
             else if (strstr((char*)rx_buf, "+CMQTTCONNECT:")) {
                 int client_id = -1, result = -1;
-                sscanf((char*)rx_buf, "+CMQTTCONNECT: %d,%d", &client_id, &result);
-                sim7600_event_t ev = {
-                    .type = (result == 0) ? SIM7600_EVENT_MQTT_CONNECTED : SIM7600_EVENT_MQTT_DISCONNECTED
-                };
-                if (sim7600_event_queue)
-                    xQueueSend(sim7600_event_queue, &ev, 0);
-                ESP_LOGI(TAG, "MQTT connect result=%d", result);
+                if (sscanf((char*)rx_buf, "+CMQTTCONNECT: %d,%d", &client_id, &result) == 2) {
+                    sim7600_event_t ev = {
+                        .type = (result == 0)
+                            ? SIM7600_EVENT_MQTT_CONNECTED
+                            : SIM7600_EVENT_MQTT_DISCONNECTED
+                    };
+                    if (sim7600_event_queue)
+                        xQueueSend(sim7600_event_queue, &ev, 0);
+                    ESP_LOGI(TAG, "MQTT connect result=%d", result);
+                } else {
+                    ESP_LOGW(TAG, "Malformed +CMQTTCONNECT response: %s", rx_buf);
+                }
+            }
+            else if (strstr((char*)rx_buf, "+CMQTTPUB:")) {
+                int client_id = -1, result = -1;
+                if (sscanf((char*)rx_buf, "+CMQTTPUB: %d,%d", &client_id, &result) == 2){
+                    sim7600_event_t ev = {
+                        .type = (result == 0) ? SIM7600_EVENT_MQTT_PUB_SUCCESS : SIM7600_EVENT_MQTT_PUB_FAILED
+                    };
+                    if (sim7600_event_queue)
+                        xQueueSend(sim7600_event_queue, &ev, 0);
+                    ESP_LOGI(TAG, "MQTT connect result=%d", result);
+                } else {
+                    ESP_LOGW(TAG, "Malformed +CMQTTPUB response: %s", rx_buf);
+                }
             }
         }
 
-        vTaskDelay(20 / portTICK_PERIOD_MS);
+        vTaskDelay(50 / portTICK_PERIOD_MS);
     }
 }
 
