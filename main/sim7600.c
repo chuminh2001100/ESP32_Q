@@ -364,10 +364,10 @@ bool sim7600_mqtt_subscribe(const char *topic, int qos) {
     // Bước 1: gửi lệnh khai báo độ dài topic và QoS
     snprintf(cmd, sizeof(cmd), "AT+CMQTTSUBTOPIC=0,%d,%d", (int)strlen(topic), qos);
     if (!sim7600_send_cmd_str(cmd, ">", 1, 2000)) return false;
-
+    vTaskDelay(200 / portTICK_PERIOD_MS);
     // Bước 2: gửi nội dung topic
     if (!sim7600_send_cmd_str(topic, "OK", 1, 2000)) return false;
-
+    vTaskDelay(200 / portTICK_PERIOD_MS);
     // Bước 3: thực hiện lệnh subscribe
     // msgid = 1, timeout = 60
     snprintf(cmd, sizeof(cmd), "AT+CMQTTSUB=0");
