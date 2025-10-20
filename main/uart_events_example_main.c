@@ -65,23 +65,23 @@ void sim7600_event_task(void *param) {
                     snprintf(topic_check_3, sizeof(topic_check_3), "smart/devices/%d/control", KEY_3);
                     if (strcmp(evt.topic, topic_check) == 0) {
                         ESP_LOGI("MQTT_TASK", "CMD1 -> toggle LED");
-                        gpio_set_level(RESET_OUTPUT_GPIO_1, 0);
-                        vTaskDelay(1000 / portTICK_PERIOD_MS);
                         gpio_set_level(RESET_OUTPUT_GPIO_1, 1);
+                        vTaskDelay(1000 / portTICK_PERIOD_MS);
+                        gpio_set_level(RESET_OUTPUT_GPIO_1, 0);
                         // xử lý action 1
                     } 
                     else if (strcmp(evt.topic, topic_check_2) == 0) {
                         ESP_LOGI("MQTT_TASK", "CMD2 -> reset SIM");
-                        gpio_set_level(RESET_OUTPUT_GPIO_2, 0);
-                        vTaskDelay(1000 / portTICK_PERIOD_MS);
                         gpio_set_level(RESET_OUTPUT_GPIO_2, 1);
+                        vTaskDelay(1000 / portTICK_PERIOD_MS);
+                        gpio_set_level(RESET_OUTPUT_GPIO_2, 0);
                         // xử lý action 2
                     } 
                     else if (strcmp(evt.topic, topic_check_3) == 0) {
                         ESP_LOGI("MQTT_TASK", "CMD3 -> custom action");
-                        gpio_set_level(RESET_OUTPUT_GPIO_3, 0);
-                        vTaskDelay(1000 / portTICK_PERIOD_MS);
                         gpio_set_level(RESET_OUTPUT_GPIO_3, 1);
+                        vTaskDelay(1000 / portTICK_PERIOD_MS);
+                        gpio_set_level(RESET_OUTPUT_GPIO_3, 0);
                         // xử lý action 3
                     }
                     break;
@@ -528,9 +528,9 @@ static void gpio_app_init(void) {
     };
     gpio_config(&out_conf);
 
-    gpio_set_level(RESET_OUTPUT_GPIO_1, 1);
-    gpio_set_level(RESET_OUTPUT_GPIO_2, 1);
-    gpio_set_level(RESET_OUTPUT_GPIO_3, 1);
+    gpio_set_level(RESET_OUTPUT_GPIO_1, 0);
+    gpio_set_level(RESET_OUTPUT_GPIO_2, 0);
+    gpio_set_level(RESET_OUTPUT_GPIO_3, 0);
 }
 
 // ---------------- Main Entry ----------------
